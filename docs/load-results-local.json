@@ -1,0 +1,74 @@
+{
+  "at": "2026-11-19T07:25:19.211Z",
+  "target": "local-model",
+  "gasLatencyMs": 900,
+  "durationS": 15,
+  "results": [
+    {
+      "scenario": "portal_read (authenticated GET /api/portal)",
+      "connections": 10,
+      "rps": 10.8,
+      "p50_ms": 890,
+      "p97_5_ms": 1114,
+      "p99_ms": 1124,
+      "ok_2xx": 162,
+      "non2xx": 0,
+      "errors": 0
+    },
+    {
+      "scenario": "portal_read (authenticated GET /api/portal)",
+      "connections": 30,
+      "rps": 31.8,
+      "p50_ms": 907,
+      "p97_5_ms": 1125,
+      "p99_ms": 1427,
+      "ok_2xx": 477,
+      "non2xx": 0,
+      "errors": 0
+    },
+    {
+      "scenario": "portal_read (authenticated GET /api/portal)",
+      "connections": 60,
+      "rps": 37.4,
+      "p50_ms": 985,
+      "p97_5_ms": 4380,
+      "p99_ms": 4641,
+      "ok_2xx": 464,
+      "non2xx": 97,
+      "errors": 0
+    },
+    {
+      "scenario": "public_config (GET /api/public/config, cached 60 s in isolate)",
+      "connections": 30,
+      "rps": 10082,
+      "p50_ms": 2,
+      "p97_5_ms": 5,
+      "p99_ms": 6,
+      "ok_2xx": 600,
+      "non2xx": 150615,
+      "errors": 0
+    },
+    {
+      "scenario": "submit_complaint (POST /api/complaints, write)",
+      "connections": 5,
+      "rps": 1.1,
+      "p50_ms": 4065,
+      "p97_5_ms": 5471,
+      "p99_ms": 5471,
+      "ok_2xx": 16,
+      "non2xx": 0,
+      "errors": 0
+    },
+    {
+      "scenario": "submit_complaint (POST /api/complaints, write)",
+      "connections": 20,
+      "rps": 0.4,
+      "p50_ms": 6953,
+      "p97_5_ms": 9643,
+      "p99_ms": 9643,
+      "ok_2xx": 6,
+      "non2xx": 0,
+      "errors": 28
+    }
+  ]
+}
