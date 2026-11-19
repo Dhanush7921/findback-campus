@@ -22,7 +22,8 @@ results.push(`client nav -> ${p.url()}`);
 console.log(results.join('\n'));
 // API errors are expected until the backend is configured; report them separately.
 const apiErr = errors.filter((e) => /fetch|api|network/i.test(e));
-const appErr = errors.filter((e) => !apiErr.includes(e));
+// Deep links load 404.html (status 404) by design; failing sub-resources are tracked separately below.
+const appErr = errors.filter((e) => !apiErr.includes(e) && !/^Failed to load resource/.test(e));
 console.log('api-related console errors (backend not configured yet is expected):', apiErr.length);
 console.log('app console errors:', JSON.stringify(appErr.map((e) => e.slice(0, 200))));
 console.log('failed sub-resources:', JSON.stringify(bad));
