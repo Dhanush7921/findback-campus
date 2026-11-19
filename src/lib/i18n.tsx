@@ -22,6 +22,7 @@ const en = {
   'common.signout': 'Sign out',
   'common.lastUpdated': 'Last updated',
   'common.notConnected': 'The FindBack service is being connected. Submissions open as soon as it is live.',
+  'common.unavailable': 'The FindBack service is temporarily unavailable. Please try again in a few minutes.',
 
   'home.eyebrow': 'Official campus lost & found',
   'home.title1': 'Lost something on campus?',
@@ -206,6 +207,7 @@ const te: Partial<Record<Key, string>> = {
   'common.signout': 'సైన్ అవుట్',
   'common.lastUpdated': 'చివరి నవీకరణ',
   'common.notConnected': 'FindBack సేవ కనెక్ట్ అవుతోంది. అది ప్రారంభమైన వెంటనే ఫిర్యాదులు స్వీకరిస్తాము.',
+  'common.unavailable': 'FindBack సేవ తాత్కాలికంగా అందుబాటులో లేదు. దయచేసి కొన్ని నిమిషాల తర్వాత మళ్లీ ప్రయత్నించండి.',
   'home.eyebrow': 'అధికారిక క్యాంపస్ లాస్ట్ & ఫౌండ్',
   'home.title1': 'క్యాంపస్‌లో ఏదైనా పోగొట్టుకున్నారా?',
   'home.title2': 'తిరిగి అందిద్దాం.',
