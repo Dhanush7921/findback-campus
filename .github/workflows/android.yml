@@ -13,16 +13,17 @@ jobs:
     env:
       HAS_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: 21, cache: gradle }
-      - uses: android-actions/setup-android@v3
       - run: npm ci
       - name: Build web assets for native
         env: { VITE_API_BASE: '${{ vars.VITE_API_BASE }}' }
         run: npm run build:native
+      - name: Android SDK (preinstalled on ubuntu-latest)
+        run: echo "ANDROID_HOME=$ANDROID_HOME" && test -d "$ANDROID_HOME"
       - run: npx cap sync android
       - name: Debug APK
         working-directory: android
