@@ -339,10 +339,7 @@ function setupFindBack() {
   ScriptApp.newTrigger('retentionSweep').timeBased().everyDays(1).atHour(3).create();
   Logger.log('FindBack setup complete. Tabs, private folders and daily triggers are ready.');
   if (created) {
-    Logger.log('Generated new secrets. Copy these into GitHub repository secrets, then clear this log:');
-    Logger.log('GAS_SHARED_SECRET = ' + props.getProperty('FB_SHARED_SECRET'));
-    Logger.log('PIN_PEPPER = ' + fbRandomSecret_());
-    Logger.log('SESSION_KEY = ' + fbRandomSecret_());
+    Logger.log('Generated a new shared secret. Run showSharedSecret() and copy it into the GAS_SHARED_SECRET GitHub secret.');
   } else {
     Logger.log('Existing shared secret kept. Run showSharedSecret() if you need it again.');
   }

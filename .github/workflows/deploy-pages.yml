@@ -3,6 +3,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      api_base:
+        description: Worker URL (set automatically by the API deploy)
+        required: false
 permissions:
   contents: read
   pages: write
@@ -19,10 +23,27 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm test
+      - name: Resolve API URL
+        id: api
+        env:
+          INPUT_API: ${{ inputs.api_base }}
+          VAR_API: ${{ vars.VITE_API_BASE }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          api="${INPUT_API:-$VAR_API}"
+          if [ -z "$api" ] && [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            sub=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" | jq -r '.result.subdomain // empty' || true)
+            [ -n "$sub" ] && api="https://findback-api.$sub.workers.dev"
+          fi
+          # The site enables forms only after the API answers at runtime, so a configured-but-down API is safe to build against.
+          if [ -z "$api" ]; then echo "::warning::No API configured; building with submissions disabled."; exit 0; fi
+          echo "base=$api" >> "$GITHUB_OUTPUT"
+          if curl -fsS --max-time 20 "$api/api/health" | grep -q '"storeReachable":true'; then echo "API healthy: $api"; else echo "::warning::API at $api is not healthy right now."; fi
       - name: Build
         env:
           # Repository variables (Settings → Secrets and variables → Actions → Variables). Public values only.
-          VITE_API_BASE: ${{ vars.VITE_API_BASE }}
+          VITE_API_BASE: ${{ steps.api.outputs.base }}
           VITE_BASE: ${{ vars.VITE_BASE || format('/{0}/', github.event.repository.name) }}
         run: npm run build:pages
       - name: Custom domain (optional)
