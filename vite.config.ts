@@ -22,7 +22,7 @@ export default defineConfig(({ mode }) => {
         "script-src 'self' https://accounts.google.com/gsi/client https://challenges.cloudflare.com",
         "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
         "img-src 'self' data: blob:",
-        "font-src 'self'",
+        "font-src 'self' data:",
         `connect-src 'self' ${apiOrigin} https://accounts.google.com/gsi/`.trim(),
         'frame-src https://accounts.google.com/gsi/ https://challenges.cloudflare.com',
         "worker-src 'self'",
