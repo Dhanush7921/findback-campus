@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router';
 import { accessInput } from '../../../shared/domain';
 import { ShieldArt } from '../../components/art';
 import { Button, Card, Field, Input, Notice } from '../../components/ui';
-import { ApiError, apiConfigured, apiPost } from '../../lib/api';
+import { ApiError, apiPost } from '../../lib/api';
 import { useConfig } from '../../lib/config';
 import { useI18n } from '../../lib/i18n';
 import { saveSession } from '../../lib/session';
@@ -18,7 +18,7 @@ function formatId(v: string) {
 export default function Track() {
   const { t } = useI18n();
   const nav = useNavigate();
-  const { config } = useConfig();
+  const { config, status } = useConfig();
   const [id, setId] = useState('');
   const [pin, setPin] = useState('');
   const [errors, setErrors] = useState<{ complaintId?: string; pin?: string }>({});
@@ -70,7 +70,8 @@ export default function Track() {
         <div className="mb-6 grid h-12 w-12 place-items-center rounded-2xl brand-gradient text-white"><LockKeyhole className="h-6 w-6" /></div>
         <h1 className="text-2xl font-extrabold sm:text-3xl">{t('access.title')}</h1>
         <p className="mt-2 text-sm text-ink-500">{t('access.lead')}</p>
-        {!apiConfigured() && <Notice tone="warn" className="mt-4">{t('common.notConnected')}</Notice>}
+        {status === 'unconfigured' && <Notice tone="warn" className="mt-4">{t('common.notConnected')}</Notice>}
+        {status === 'offline' && <Notice tone="warn" className="mt-4">{t('common.unavailable')}</Notice>}
         <form onSubmit={submit} noValidate className="mt-6 space-y-5">
           <Field label={t('access.id')} required error={errors.complaintId}>
             {(fid, d) => <Input id={fid} aria-describedby={d} value={id} onChange={(e) => setId(formatId(e.target.value))} placeholder="FB-XXXX-XXXX" autoComplete="off" autoCapitalize="characters" spellCheck={false} className="font-mono tracking-wider" invalid={!!errors.complaintId} />}
@@ -79,7 +80,7 @@ export default function Track() {
             {(fid, d) => <Input id={fid} aria-describedby={d} type="password" value={pin} onChange={(e) => setPin(fmt(e.target.value, [4, 4, 2]))} placeholder="XXXX-XXXX-XX" autoComplete="off" autoCapitalize="characters" spellCheck={false} className="font-mono tracking-wider" invalid={!!errors.pin} />}
           </Field>
           {error && <Notice tone="error">{error}</Notice>}
-          <Button type="submit" size="lg" className="w-full" loading={busy} disabled={!apiConfigured()}>{busy ? t('access.verifying') : t('access.submit')}</Button>
+          <Button type="submit" size="lg" className="w-full" loading={busy} disabled={status !== 'ready'}>{busy ? t('access.verifying') : t('access.submit')}</Button>
         </form>
         <button className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-teal-700 hover:underline" onClick={() => setShowForgot((v) => !v)} aria-expanded={showForgot}>
           <HelpCircle className="h-4 w-4" /> {t('access.forgot')}

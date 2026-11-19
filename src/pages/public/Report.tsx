@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router';
 import { CATEGORIES, complaintInput } from '../../../shared/domain';
 import { useToast } from '../../components/toast';
 import { Button, Card, Field, Input, Notice, PageHeader, Select, Textarea } from '../../components/ui';
-import { ApiError, apiConfigured, apiPost } from '../../lib/api';
+import { ApiError, apiPost } from '../../lib/api';
 import { useConfig } from '../../lib/config';
 import { useI18n } from '../../lib/i18n';
 import { compressImage } from '../../lib/image';
@@ -17,7 +17,7 @@ export default function Report() {
   const { t } = useI18n();
   const toast = useToast();
   const nav = useNavigate();
-  const { config } = useConfig();
+  const { config, status } = useConfig();
   const [form, setForm] = useState<Form>(empty);
   const [errors, setErrors] = useState<Partial<Record<keyof Form | 'consent' | 'photo', string>>>({});
   const [consent, setConsent] = useState(false);
@@ -88,7 +88,8 @@ export default function Report() {
     }
   }
 
-  const ready = apiConfigured();
+  // Submissions are enabled only after the API answered /api/public/config.
+  const ready = status === 'ready';
   const closed = config && !config.submissionsOpen;
   const F = (k: keyof Form, label: string, el: (id: string, d?: string) => React.ReactNode, opts: { required?: boolean; hint?: string; className?: string } = {}) => (
     <Field label={label} required={opts.required} optionalLabel={t('common.optional')} error={errors[k]} hint={opts.hint} className={opts.className}>
@@ -99,7 +100,8 @@ export default function Report() {
   return (
     <div className="safe-x mx-auto max-w-3xl py-10 sm:py-14">
       <PageHeader eyebrow="FindBack" title={t('submit.title')} lead={t('submit.lead')} />
-      {!ready && <Notice tone="warn" className="mb-6">{t('common.notConnected')}</Notice>}
+      {status === 'unconfigured' && <Notice tone="warn" className="mb-6">{t('common.notConnected')}</Notice>}
+      {status === 'offline' && <Notice tone="warn" className="mb-6">{t('common.unavailable')}</Notice>}
       {closed && <Notice tone="warn" className="mb-6">{t('submit.closed')}</Notice>}
       <form onSubmit={submit} noValidate className="space-y-6">
         {/* Honeypot: invisible to people, tempting to bots. */}
