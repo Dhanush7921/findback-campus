@@ -11,7 +11,7 @@ Nothing secret is ever committed. Secrets live in Apps Script properties, GitHub
    - creates the 8 tabs with headers (plain-text format, warning-protected),
    - creates private Drive folders *FindBack Media (private)* and *FindBack Backups (private)*,
    - installs daily backup (02:00) and retention (03:00) triggers,
-   - logs three generated values: `GAS_SHARED_SECRET`, `PIN_PEPPER`, `SESSION_KEY` (**View → Logs**). Copy them into GitHub secrets (step 2), then clear the log.
+   - generates the shared secret. Run `showSharedSecret()` and copy the value into the `GAS_SHARED_SECRET` GitHub secret (step 2), then clear the log.
 4. **Deploy → New deployment → Web app**: *Execute as: Me*, *Who has access: Anyone*. Copy the `/exec` URL → GitHub secret `GAS_URL`.
    "Anyone" is required so the Worker can call it; every request must carry a valid HMAC signature made with `GAS_SHARED_SECRET`, or it is rejected.
 5. Keep the spreadsheet and both folders **private** (do not use "Anyone with the link").
@@ -27,8 +27,8 @@ Nothing secret is ever committed. Secrets live in Apps Script properties, GitHub
 | `CLOUDFLARE_ACCOUNT_ID` | account ID |
 | `GAS_URL` | Apps Script `/exec` URL |
 | `GAS_SHARED_SECRET` | from the setup log |
-| `PIN_PEPPER` | from the setup log (never change after launch — it would invalidate every PIN) |
-| `SESSION_KEY` | from the setup log |
+| `PIN_PEPPER` | optional — if absent, the deploy generates it once inside Cloudflare and never replaces it (changing it invalidates every PIN) |
+| `SESSION_KEY` | optional — generated inside Cloudflare like `PIN_PEPPER` |
 | `GOOGLE_CLIENT_ID` | step 4 (optional until staff go live) |
 | `TURNSTILE_SECRET` | optional Cloudflare Turnstile secret |
 
@@ -37,7 +37,7 @@ Nothing secret is ever committed. Secrets live in Apps Script properties, GitHub
 ## 3. GitHub Pages (frontend)
 
 1. Repo **Settings → Pages → Build and deployment → Source: GitHub Actions**.
-2. **Settings → Secrets and variables → Actions → Variables**: `VITE_API_BASE` = the Worker URL.
+2. `VITE_API_BASE` is set automatically: the API deploy rebuilds the site with the Worker URL (an optional repository variable `VITE_API_BASE` overrides it, e.g. for a custom API domain).
 3. **Actions → Deploy frontend (GitHub Pages) → Run workflow** (also runs on every push to `main`).
    Site: `https://<owner>.github.io/findback-campus/`. SPA deep links work via `404.html`.
 

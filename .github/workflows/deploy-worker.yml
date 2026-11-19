@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: write # to start the Pages rebuild once the API is healthy
 concurrency:
   group: worker
   cancel-in-progress: false
@@ -19,11 +20,9 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           GAS_URL: ${{ secrets.GAS_URL }}
           GAS_SHARED_SECRET: ${{ secrets.GAS_SHARED_SECRET }}
-          PIN_PEPPER: ${{ secrets.PIN_PEPPER }}
-          SESSION_KEY: ${{ secrets.SESSION_KEY }}
         run: |
           missing=""
-          for n in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID GAS_URL GAS_SHARED_SECRET PIN_PEPPER SESSION_KEY; do
+          for n in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID GAS_URL GAS_SHARED_SECRET; do
             [ -n "${!n}" ] || missing="$missing $n"
           done
           if [ -n "$missing" ]; then
@@ -59,9 +58,15 @@ jobs:
             --var "ALLOWED_ORIGINS:${origins}" --var "STAFF_EMAILS:${STAFF_EMAILS:-}" \
             --var "STAFF_DOMAIN:${STAFF_DOMAIN:-}" --var "TURNSTILE_SITE_KEY:${TURNSTILE_SITE_KEY:-}" | tee deploy.log
           # Secrets go from GitHub's encrypted store straight to Cloudflare; they are never printed or committed.
-          node -e '
+          # PIN_PEPPER / SESSION_KEY: if not stored in GitHub, they are generated once inside Cloudflare and kept there
+          # (an existing Cloudflare value is never replaced, because changing PIN_PEPPER would invalidate every PIN).
+          existing=$(npx wrangler secret list --config worker/wrangler.toml 2>/dev/null || echo '[]')
+          EXISTING="$existing" node -e '
+            const crypto = require("crypto");
+            let have = []; try { have = JSON.parse(process.env.EXISTING).map((x) => x.name); } catch {}
             const keys = ["GAS_URL","GAS_SHARED_SECRET","PIN_PEPPER","SESSION_KEY","GOOGLE_CLIENT_ID","TURNSTILE_SECRET"];
             const o = {}; for (const k of keys) if (process.env[k]) o[k] = process.env[k];
+            for (const k of ["PIN_PEPPER","SESSION_KEY"]) if (!o[k] && !have.includes(k)) { o[k] = crypto.randomBytes(32).toString("base64url"); console.log("Generated " + k + " inside Cloudflare (value not shown)."); }
             require("fs").writeFileSync(process.env.RUNNER_TEMP + "/secrets.json", JSON.stringify(o));'
           npx wrangler secret bulk "$RUNNER_TEMP/secrets.json" --config worker/wrangler.toml
           rm -f "$RUNNER_TEMP/secrets.json"
@@ -73,3 +78,7 @@ jobs:
           sleep 5
           curl -sS "$WORKER_URL/api/health" | tee health.json
           grep -q '"storeReachable":true' health.json || (echo "::error::API deployed but cannot reach Apps Script / secrets incomplete" && exit 1)
+      - name: Rebuild the website against this API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-pages.yml --repo "$GITHUB_REPOSITORY" --ref main -f api_base="$WORKER_URL"
