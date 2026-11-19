@@ -21,6 +21,14 @@ jobs:
           GAS_URL: ${{ secrets.GAS_URL }}
           GAS_SHARED_SECRET: ${{ secrets.GAS_SHARED_SECRET }}
         run: |
+          # Validate the Cloudflare token first, so it can be checked before Apps Script is set up.
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            r=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts")
+            if echo "$r" | jq -e '.success' >/dev/null; then echo "Cloudflare token can manage Workers on this account."
+            else echo "::error::Cloudflare token cannot manage Workers on account CLOUDFLARE_ACCOUNT_ID: $(echo "$r" | jq -c '[.errors[]?.message]'). Create it from the 'Edit Cloudflare Workers' template."; exit 1; fi
+            sub=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" | jq -r '.result.subdomain // empty')
+            [ -n "$sub" ] && echo "workers.dev subdomain: $sub" || echo "::warning::No workers.dev subdomain yet. Open Workers & Pages in the Cloudflare dashboard once to choose one."
+          fi
           missing=""
           for n in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID GAS_URL GAS_SHARED_SECRET; do
             [ -n "${!n}" ] || missing="$missing $n"
