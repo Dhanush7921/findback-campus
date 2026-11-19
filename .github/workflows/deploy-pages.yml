@@ -34,6 +34,8 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -48,3 +50,14 @@ jobs:
           curl -fsS "$url" | grep -q '<div id="root">'
           code=$(curl -s -o /dev/null -w '%{http_code}' "${url}track"); echo "deep link /track -> $code (404 status with SPA fallback body is expected on Pages)"
           curl -fsS "${url}manifest.webmanifest" | grep -q '"standalone"'
+  browser-check:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Live browser check (SPA routes, client navigation, assets, console errors)
+        run: node tests/live/check-live.mjs "${{ needs.deploy.outputs.page_url }}"
