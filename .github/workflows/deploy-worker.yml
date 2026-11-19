@@ -23,6 +23,12 @@ jobs:
         run: |
           # Validate the Cloudflare token first, so it can be checked before Apps Script is set up.
           if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            # Diagnostics only: token status and account-ID shape (no secret values are printed).
+            [[ "$CLOUDFLARE_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]] || echo "::error::CLOUDFLARE_ACCOUNT_ID is not a 32-character hex ID (check for spaces or a pasted URL)."
+            [[ "$CLOUDFLARE_API_TOKEN" =~ [[:space:]] ]] && echo "::error::CLOUDFLARE_API_TOKEN contains whitespace or a newline."
+            for v in "user/tokens/verify" "accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify"; do
+              echo "verify ${v%%/*}-scoped: $(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/$v" | jq -c '{success, status: .result.status, errors: [.errors[]?.message]}')"
+            done
             r=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts")
             if echo "$r" | jq -e '.success' >/dev/null; then echo "Cloudflare token can manage Workers on this account."
             else echo "::error::Cloudflare token cannot manage Workers on account CLOUDFLARE_ACCOUNT_ID: $(echo "$r" | jq -c '[.errors[]?.message]'). Create it from the 'Edit Cloudflare Workers' template."; exit 1; fi
