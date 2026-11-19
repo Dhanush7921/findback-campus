@@ -1,0 +1,68 @@
+name: Deploy API (Cloudflare Worker)
+on:
+  push:
+    branches: [main]
+    paths: ['worker/**', 'shared/**', '.github/workflows/deploy-worker.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: worker
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      HAS_CF: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+    steps:
+      - name: Check configuration
+        if: env.HAS_CF != 'true'
+        run: |
+          echo "::warning::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID secrets are not set — skipping API deployment. See docs/DEPLOYMENT.md."
+      - uses: actions/checkout@v4
+        if: env.HAS_CF == 'true'
+      - uses: actions/setup-node@v4
+        if: env.HAS_CF == 'true'
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+        if: env.HAS_CF == 'true'
+      - run: npm test
+        if: env.HAS_CF == 'true'
+      - name: Deploy Worker and sync secrets
+        if: env.HAS_CF == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GAS_URL: ${{ secrets.GAS_URL }}
+          GAS_SHARED_SECRET: ${{ secrets.GAS_SHARED_SECRET }}
+          PIN_PEPPER: ${{ secrets.PIN_PEPPER }}
+          SESSION_KEY: ${{ secrets.SESSION_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
+          STAFF_EMAILS: ${{ vars.STAFF_EMAILS }}
+          STAFF_DOMAIN: ${{ vars.STAFF_DOMAIN }}
+          TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
+          EXTRA_ORIGINS: ${{ vars.EXTRA_ORIGINS }}
+          PAGES_ORIGIN: https://${{ github.repository_owner }}.github.io
+        run: |
+          set -euo pipefail
+          origins="${PAGES_ORIGIN,,},https://localhost,capacitor://localhost${EXTRA_ORIGINS:+,$EXTRA_ORIGINS}"
+          npx wrangler deploy --config worker/wrangler.toml \
+            --var "ALLOWED_ORIGINS:${origins}" --var "STAFF_EMAILS:${STAFF_EMAILS:-}" \
+            --var "STAFF_DOMAIN:${STAFF_DOMAIN:-}" --var "TURNSTILE_SITE_KEY:${TURNSTILE_SITE_KEY:-}" | tee deploy.log
+          # Secrets go from GitHub's encrypted store straight to Cloudflare; they are never printed or committed.
+          node -e '
+            const keys = ["GAS_URL","GAS_SHARED_SECRET","PIN_PEPPER","SESSION_KEY","GOOGLE_CLIENT_ID","TURNSTILE_SECRET"];
+            const o = {}; for (const k of keys) if (process.env[k]) o[k] = process.env[k];
+            require("fs").writeFileSync(process.env.RUNNER_TEMP + "/secrets.json", JSON.stringify(o));'
+          npx wrangler secret bulk "$RUNNER_TEMP/secrets.json" --config worker/wrangler.toml
+          rm -f "$RUNNER_TEMP/secrets.json"
+          url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          echo "WORKER_URL=$url" >> "$GITHUB_ENV"
+          echo "Worker URL: $url"
+      - name: Live health check
+        if: env.HAS_CF == 'true'
+        run: |
+          sleep 5
+          curl -sS "$WORKER_URL/api/health" | tee health.json
+          grep -q '"storeReachable":true' health.json || (echo "::error::API deployed but cannot reach Apps Script / secrets incomplete" && exit 1)
