@@ -9,7 +9,7 @@
     "build:native": "tsc -b && vite build --mode native",
     "preview": "vite preview",
     "lint": "eslint .",
-    "typecheck": "tsc -b && tsc -p worker/tsconfig.json --noEmit",
+    "typecheck": "tsc -b && tsc -p worker/tsconfig.json --noEmit && tsc -p server/tsconfig.json",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:load": "node tests/load/run-load.mjs",
@@ -18,7 +18,10 @@
     "cap:sync": "npm run build:native && cap sync",
     "build:pages": "npm run build && cp dist/index.html dist/404.html",
     "build:e2e": "VITE_BASE=/findback-campus/ VITE_API_BASE=http://127.0.0.1:8787 npm run build:pages",
-    "deploy:backend": "node scripts/deploy-backend.mjs"
+    "deploy:backend": "node scripts/deploy-backend.mjs",
+    "build:server": "esbuild server/main.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist-server/main.mjs",
+    "deploy:gcp": "node scripts/deploy-gcp.mjs",
+    "bench:sheets": "esbuild tests/load/bench-sheets.ts --bundle --platform=node --format=esm --outfile=dist-server/bench.mjs && node dist-server/bench.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.6.2",

@@ -1,8 +1,6 @@
-name: Deploy API (Cloudflare Worker)
+name: Deploy API (Cloudflare Worker, legacy)
+# Legacy Cloudflare deploy, kept only until the Cloud Run backend is verified live. Manual runs only.
 on:
-  push:
-    branches: [main]
-    paths: ['worker/**', 'shared/**', '.github/workflows/deploy-worker.yml']
   workflow_dispatch:
 permissions:
   contents: read

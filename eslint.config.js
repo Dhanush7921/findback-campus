@@ -4,7 +4,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'android', 'ios', 'node_modules', 'coverage', 'test-results', 'playwright-report', '**/.wrangler', 'apps-script'] },
+  { ignores: ['dist-server', 'dist', 'android', 'ios', 'node_modules', 'coverage', 'test-results', 'playwright-report', '**/.wrangler', 'apps-script'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
