@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { MemoryStore } from '../src/store/memory';
 import type { Store } from '../src/store/types';
 import { gasStore } from './helpers';
+import { SheetsStore } from '../src/store/sheets';
+import { createFakeGoogle } from '../../tests/gcp/fake-google';
 
 const impls: [string, () => Store][] = [
   ['MemoryStore', () => new MemoryStore()],
   ['AppsScriptStore + real Code.gs', () => gasStore().store],
+  ['SheetsStore + fake Google APIs', () => new SheetsStore('s', 'b', async () => 't', { fetchImpl: createFakeGoogle().fetchImpl })],
 ];
 
 describe.each(impls)('Store contract: %s', (_name, make) => {

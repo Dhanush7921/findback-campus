@@ -4,6 +4,26 @@ Order: **1 Apps Script → 2 Cloudflare Worker → 3 GitHub Pages → 4 Staff si
 Nothing secret is ever committed. Secrets live in Apps Script properties, GitHub encrypted secrets and Cloudflare Worker secrets.
 
 
+
+## Google Cloud Run (recommended)
+
+The API runs on Cloud Run in `asia-south1`, reads/writes the existing Google Sheet through the Sheets API with the
+service's own identity (no key files), stores photos and backups in a private Cloud Storage bucket, and reads
+`PIN_PEPPER` / `SESSION_KEY` from Secret Manager. Apps Script and Cloudflare are not needed.
+
+From the repo folder on your computer (needs Node 22+, the Google Cloud CLI and optionally the GitHub CLI):
+
+```
+npm ci
+npm run deploy:gcp
+```
+
+The script signs you in through the browser, creates or selects a project, asks you to type "yes" before linking
+billing, enables APIs, creates the `findback-api` service account, bucket and secrets (generated once, never rotated),
+asks you to share the Sheet with the service account as Editor, deploys, checks `/api/health`, then sets
+`VITE_API_BASE` and rebuilds the website and Android app. Optional: set `STAFF_EMAILS`, `STAFF_DOMAIN`,
+`GOOGLE_CLIENT_ID` in the environment before running to enable staff sign-in.
+
 ## Quick path: deploy the API from your own computer (no API tokens)
 
 After the Apps Script step, run in the repo folder (Node 22+):

@@ -21,3 +21,4 @@ android/app/release
 ios/App/Pods
 ios/App/build
 ios/DerivedData
+dist-server

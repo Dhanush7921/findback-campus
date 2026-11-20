@@ -1001,7 +1001,8 @@ export function createApp(deps: AppDeps) {
     if (origin && !allowedOrigins.includes(origin)) return withHeaders(errorResponse(new HttpError(403, 'origin_not_allowed', 'Origin not allowed')), cors);
     let res: Response;
     try {
-      const ip = req.headers.get('cf-connecting-ip') ?? '0.0.0.0';
+      // Cloudflare sets cf-connecting-ip; on Cloud Run the Google front end appends the real client IP as the last X-Forwarded-For entry.
+      const ip = req.headers.get('cf-connecting-ip') ?? req.headers.get('x-forwarded-for')?.split(',').pop()?.trim() ?? '0.0.0.0';
       await limit(limiters.api, `api:${ip}`);
       const route = routes.find(([m, re]) => m === req.method && re.test(url.pathname));
       if (!route) throw new HttpError(404, 'not_found', 'Not found');

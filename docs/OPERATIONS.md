@@ -38,3 +38,17 @@ Measured with `npm run test:load` against the real Worker code and the real `Cod
 - `GET /api/health` (configured + Sheet reachable). Use any uptime monitor.
 - Cloudflare dashboard → Workers → `findback-api` → Logs/Analytics for status codes and latency.
 - Apps Script → Executions for data-layer errors and quota messages.
+
+## Cloud Run capacity (measured 2026-11-20, `npm run bench:sheets`)
+
+Real API code + SheetsStore against a fake Google API with modelled latency (Sheets write 500 ms, read 300 ms), one instance:
+
+| Operation | Throughput | Notes |
+|---|---|---|
+| Public/portal reads | > 10,000 req/s | served from the in-memory copy of the sheet; Sheets is re-read every 60 s |
+| PIN verification | thousands/s | limited on purpose: 10 attempts per complaint per 10 min, lockout after 5 failures |
+| Complaint submission | ≈ 2/s burst, ≈ 1/s sustained | one Sheets API write per submission; Google's default quota is 60 write requests/min per service account (raise in the Cloud console if needed) |
+
+That is roughly 3,600 new complaints per hour, which fits 10,000+ potential users. It is not 10,000 simultaneous writers.
+`max-instances=1` keeps writes ordered and the cache consistent. If more write throughput is ever needed, ask for a Sheets
+quota increase first, then consider a database (only with your approval).

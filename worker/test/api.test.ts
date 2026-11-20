@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { complaintBody, gasStore, makeClient, TINY_JPEG } from './helpers';
 import { MemoryStore } from '../src/store/memory';
+import { SheetsStore } from '../src/store/sheets';
+import { createFakeGoogle } from '../../tests/gcp/fake-google';
 
 const devEnv = { APP_ENV: 'development', DEV_STAFF_LOGIN: '1' } as const;
 
@@ -13,6 +15,7 @@ async function staffToken(call: ReturnType<typeof makeClient>['call'], role = 'a
 describe.each([
   ['memory', () => new MemoryStore()],
   ['apps-script emulator', () => gasStore().store],
+  ['google sheets api (fake)', () => new SheetsStore('s', 'b', async () => 't', { fetchImpl: createFakeGoogle().fetchImpl })],
 ])('End-to-end API workflow (%s)', (_n, mkStore) => {
   it('submit → verify → match → claim → approve → handover → close', async () => {
     const { call, store } = makeClient({ env: devEnv as never, store: mkStore() });
