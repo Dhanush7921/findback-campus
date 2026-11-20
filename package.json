@@ -17,7 +17,8 @@
     "worker:dev": "wrangler dev --config worker/wrangler.toml",
     "cap:sync": "npm run build:native && cap sync",
     "build:pages": "npm run build && cp dist/index.html dist/404.html",
-    "build:e2e": "VITE_BASE=/findback-campus/ VITE_API_BASE=http://127.0.0.1:8787 npm run build:pages"
+    "build:e2e": "VITE_BASE=/findback-campus/ VITE_API_BASE=http://127.0.0.1:8787 npm run build:pages",
+    "deploy:backend": "node scripts/deploy-backend.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.6.2",

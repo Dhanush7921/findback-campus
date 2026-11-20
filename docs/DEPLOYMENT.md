@@ -3,6 +3,20 @@
 Order: **1 Apps Script → 2 Cloudflare Worker → 3 GitHub Pages → 4 Staff sign-in (optional but required for staff use) → 5 Android signing (optional)**.
 Nothing secret is ever committed. Secrets live in Apps Script properties, GitHub encrypted secrets and Cloudflare Worker secrets.
 
+
+## Quick path: deploy the API from your own computer (no API tokens)
+
+After the Apps Script step, run in the repo folder (Node 22+):
+
+```
+npm ci
+npm run deploy:backend
+```
+
+It opens your browser for Cloudflare sign-in, deploys the Worker, asks for `GAS_URL` and `GAS_SHARED_SECRET` in a hidden prompt
+(stored only in Cloudflare), generates `PIN_PEPPER`/`SESSION_KEY` if absent (never replaced), checks `/api/health`, then uses the
+GitHub CLI (browser sign-in) to set `VITE_API_BASE` and rebuild the website. Re-run with `-- --reset-gas` to change the Apps Script values.
+
 ## 1. Apps Script (data layer)
 
 1. Open the FindBack spreadsheet (signed in as the account that owns it) → **Extensions → Apps Script**.
