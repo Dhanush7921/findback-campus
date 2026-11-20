@@ -44,12 +44,12 @@ test('public pages, language switch and direct-route loading', async ({ page }) 
   await page.goto('definitely-not-a-page');
   await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
   await page.goto('dashboard');
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/findback-campus\/?$/);
 });
 
 test('validation feedback blocks empty submission', async ({ page }) => {
   await page.goto('report');
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/findback-campus\/?$/);
 });
 
 test('full lifecycle through the UI: submit → verify → staff match → claim → approve → handover', async ({ page, browser }) => {
