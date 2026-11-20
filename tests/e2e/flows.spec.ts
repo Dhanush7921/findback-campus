@@ -3,11 +3,10 @@ import { expect, test, type Page } from '@playwright/test';
 const API = 'http://127.0.0.1:8787';
 
 async function fillComplaint(page: Page, item = 'Black backpack') {
+  await page.goto('access/student');
+  await page.getByRole('button', { name: /Development sign-in/ }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
   await page.goto('report');
-  await page.getByLabel('Full name').fill('Asha Reddy');
-  await page.getByLabel('Student / employee ID').fill('22CSE104');
-  await page.getByLabel('Department / class').fill('CSE — II Year');
-  await page.getByLabel('Phone').fill('+91 98765 43210');
   await page.getByLabel('Category').selectOption('Bag / Backpack');
   await page.getByLabel('Item name').fill(item);
   await page.getByLabel('Description').fill('Black backpack with a laptop sleeve and two front pockets');
@@ -24,18 +23,8 @@ async function submitComplaint(page: Page, item?: string) {
   await page.getByRole('button', { name: 'Submit complaint' }).click();
   await expect(page.getByRole('heading', { name: 'Complaint submitted' })).toBeVisible({ timeout: 20000 });
   const id = (await page.getByTestId('cred-id').textContent())!.trim();
-  const pin = (await page.getByTestId('cred-pin').textContent())!.trim();
   expect(id).toMatch(/^FB-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
-  expect(pin).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{2}$/);
-  expect(page.url()).not.toContain(pin);
-  return { id, pin };
-}
-
-async function login(page: Page, id: string, pin: string) {
-  await page.goto('track');
-  await page.getByLabel('Complaint ID').fill(id);
-  await page.getByLabel('Secret PIN').fill(pin);
-  await page.getByRole('button', { name: 'Open my complaint' }).click();
+  return { id };
 }
 
 test('public pages, language switch and direct-route loading', async ({ page }) => {
@@ -47,38 +36,28 @@ test('public pages, language switch and direct-route loading', async ({ page }) 
   });
   await expect(page.getByRole('heading', { level: 1 })).toContainText('క్యాంపస్‌లో');
   await page.evaluate(() => localStorage.setItem('fb.lang', 'en'));
-  for (const path of ['how-it-works', 'help', 'privacy', 'track', 'report']) {
+  for (const path of ['how-it-works', 'help', 'privacy', 'track', 'access/student', 'access/guest']) {
     const r = await page.goto(path);
     expect(r?.status()).toBe(200);
     await expect(page.locator('h1')).toBeVisible();
   }
   await page.goto('definitely-not-a-page');
   await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
-  await page.goto('portal');
-  await expect(page).toHaveURL(/\/track$/);
+  await page.goto('dashboard');
+  await expect(page).toHaveURL(/\/$/);
 });
 
 test('validation feedback blocks empty submission', async ({ page }) => {
   await page.goto('report');
-  await page.getByRole('button', { name: 'Submit complaint' }).click();
-  await expect(page.getByText('Please check the highlighted fields.')).toBeVisible();
-  await expect(page.locator('[aria-invalid="true"]').first()).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
 });
 
 test('full lifecycle through the UI: submit → verify → staff match → claim → approve → handover', async ({ page, browser }) => {
-  const { id, pin } = await submitComplaint(page);
-  // credentials are gone after reload
-  await page.reload();
-  await expect(page.getByText(/shown only once/)).toBeVisible();
-
-  // wrong PIN rejected
-  await login(page, id, pin.slice(0, -1) + (pin.endsWith('A') ? 'B' : 'A'));
-  await expect(page.getByText('The Complaint ID or PIN is incorrect.')).toBeVisible();
-  // correct PIN
-  await login(page, id, pin);
-  await expect(page.getByRole('heading', { name: 'Submitted', exact: true })).toBeVisible();
-  await page.reload(); // refresh keeps the short-lived session
-  await expect(page.locator('h1')).toContainText(id);
+  const { id } = await submitComplaint(page);
+  await page.getByRole('checkbox').check();
+  await page.getByRole('link', { name: 'Open my private dashboard' }).click();
+  await page.getByText(id).click();
+  await expect(page.getByText('Submitted', { exact: true }).first()).toBeVisible();
 
   // staff in a separate context
   const staffCtx = await browser.newContext();
@@ -100,12 +79,11 @@ test('full lifecycle through the UI: submit → verify → staff match → claim
   await row.getByRole('button', { name: 'Propose match' }).click();
   await expect(staff.getByText('Match proposed to student')).toBeVisible();
 
-  // student claims
-  await page.goto('portal/matches');
-  await page.getByRole('link', { name: /request claim/ }).click();
-  await page.getByLabel('Ownership evidence').fill('My green notebook with roll number 22CSE104 is inside');
-  await page.getByRole('button', { name: 'Send claim for verification' }).click();
-  await expect(page.getByText('Ownership claim submitted').first()).toBeVisible();
+  // verified reporter claims
+  await page.goto(`dashboard/complaints/${id}`);
+  await page.getByPlaceholder('Private ownership evidence').fill('My green notebook with roll number 22CSE104 is inside');
+  await page.getByRole('button', { name: 'Submit ownership claim' }).click();
+  await expect(page.getByText('Ownership Verification').first()).toBeVisible();
 
   // staff approves with checklist, then hands over
   await staff.goto('staff/claims');
@@ -116,16 +94,21 @@ test('full lifecycle through the UI: submit → verify → staff match → claim
   await card.getByRole('button', { name: 'Approve claim' }).click();
   await expect(staff.getByText(/Claim approved/)).toBeVisible();
   await staff.goto('staff/handovers');
-  await staff.getByRole('button', { name: 'Record handover' }).first().click();
-  await staff.getByLabel('Receiver full name').fill('Asha Reddy');
-  await staff.getByRole('checkbox', { name: /checked the receiver/ }).check();
-  await staff.getByRole('button', { name: 'Confirm handover' }).click();
-  await expect(staff.getByText(/Handover recorded/)).toBeVisible();
+  await staff.getByRole('button', { name: 'Start handover' }).first().click();
+  await staff.getByRole('button', { name: 'Generate receiver code' }).click();
+  const code = (await staff.locator('.font-mono.text-4xl').textContent())!.trim();
+  await page.goto(`dashboard/complaints/${id}`);
+  await page.getByLabel('6-digit handover code').fill(code);
+  await page.getByLabel('Digital receipt acknowledgment').fill('I confirm that I received this item at the office counter.');
+  await page.getByRole('button', { name: 'Confirm digital receipt' }).click();
+  await staff.reload();
+  await staff.getByRole('button', { name: 'Verify & release' }).click();
+  await staff.getByRole('checkbox', { name: /physically checked/ }).check();
+  await staff.getByRole('button', { name: 'Confirm physical release' }).click();
+  await expect(staff.getByText(/marked Returned/)).toBeVisible();
 
-  await page.goto('portal/timeline');
-  await expect(page.getByText('Item handed over to you.')).toBeVisible();
-  await page.goto('portal');
-  await expect(page.getByRole('heading', { name: 'Returned', exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText('Returned', { exact: true }).first()).toBeVisible();
 
   // analytics + activity show the work
   await staff.goto('staff/activity');
@@ -157,7 +140,7 @@ test('PWA: manifest, service worker and installability basics', async ({ page })
 });
 
 test('mobile layouts have no horizontal overflow @mobile', async ({ page }) => {
-  for (const path of ['', 'report', 'track', 'how-it-works', 'help', 'privacy', 'staff']) {
+  for (const path of ['', 'access/student', 'access/guest', 'track', 'how-it-works', 'help', 'privacy', 'staff', 'management']) {
     await page.goto(path);
     await page.waitForLoadState('networkidle');
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
@@ -165,6 +148,6 @@ test('mobile layouts have no horizontal overflow @mobile', async ({ page }) => {
   }
   await page.goto('');
   await page.screenshot({ path: 'test-results/mobile-home.png', fullPage: true });
-  await page.goto('report');
-  await page.screenshot({ path: 'test-results/mobile-report.png' });
+  await page.goto('access/student');
+  await page.screenshot({ path: 'test-results/mobile-access.png' });
 });

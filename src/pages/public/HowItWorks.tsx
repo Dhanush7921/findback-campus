@@ -36,8 +36,8 @@ export default function HowItWorks() {
         ))}
       </Card>
       <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-        <ButtonLink to="/report">{t('home.ctaReport')}</ButtonLink>
-        <ButtonLink to="/track" variant="secondary">{t('home.ctaTrack')}</ButtonLink>
+        <ButtonLink to="/access/student">Student access</ButtonLink>
+        <ButtonLink to="/access/guest" variant="secondary">Guest access</ButtonLink>
       </div>
     </div>
   );

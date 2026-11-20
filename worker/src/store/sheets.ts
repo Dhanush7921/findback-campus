@@ -190,11 +190,12 @@ export class SheetsStore implements Store {
     return { backupId: name, name };
   }
 
-  /** Redacts personal data on Returned/Closed complaints past retention_until (port of the Apps Script trigger). */
+  /** Redacts personal data on terminal complaints past retention_until (port of the Apps Script trigger). */
   async retentionSweep(): Promise<number> {
     const mem = await this.ready();
     const nowIso = new Date(this.now()).toISOString();
-    const due = mem.tables.Complaints.filter((r) => (r.status === 'Returned' || r.status === 'Closed') && r.retention_until && r.retention_until < nowIso && r.name !== '[redacted]');
+    const terminal = new Set(['Returned', 'Closed', 'Rejected', 'Cancelled']);
+    const due = mem.tables.Complaints.filter((r) => terminal.has(r.status) && r.retention_until && r.retention_until < nowIso && r.name !== '[redacted]');
     for (const r of due) {
       if (r.photo_file_id) await this.deleteFile(r.photo_file_id);
       const patch: Row = { photo_file_id: '' };

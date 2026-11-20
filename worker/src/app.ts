@@ -1,19 +1,22 @@
 import { z } from 'zod';
 import {
   accessInput, claimDecisionInput, claimInput, complaintInput, DEFAULT_SETTINGS, EDITABLE_SETTINGS,
-  foundItemInput, FOUND_ITEM_STATUSES, handoverInput, imageUpload, MAX_IMAGE_BYTES, portalUpdateInput,
+  foundItemInput, FOUND_ITEM_STATUSES, imageUpload, MAX_IMAGE_BYTES, portalUpdateInput,
   statusUpdateInput, STATUS_TRANSITIONS, type ComplaintStatus, type Row,
 } from '../../shared/domain';
-import { hashPin, safeEqual, newComplaintId, newId, newPin, sha256Hex, signSession, verifySession, type Session, type StaffSession, type StudentSession } from './crypto';
+import { hashPin, hmacHex, safeEqual, newComplaintId, newHandoverCode, newId, newPin, sha256Hex, signSession, verifySession, type ReporterSession, type Session, type StaffSession, type StudentSession } from './crypto';
 import type { Env, RateLimit } from './env';
 import { parseStaffList, verifyGoogleIdToken } from './googleAuth';
+import { verifyFirebasePhoneToken } from './firebaseAuth';
 import { corsHeaders, errorResponse, HttpError, json, readJson, withHeaders } from './http';
 import { matchScore } from './matching';
 import { LocalLimiter } from './ratelimit';
 import { StoreError, type Op, type OpResult, type Store } from './store/types';
 
 const STUDENT_TTL_MS = 15 * 60 * 1000;
+const REPORTER_TTL_MS = 60 * 60 * 1000;
 const STAFF_TTL_MS = 2 * 60 * 60 * 1000;
+const HANDOVER_TTL_MS = 10 * 60 * 1000;
 const MAX_FAILED = 5;
 const DEMO_ID = '1223';
 
@@ -40,6 +43,7 @@ const fallbackLimiters = {
   submit: new LocalLimiter(30, 10 * 60 * 1000),
   access: new LocalLimiter(60, 10 * 60 * 1000),
   accessPerId: new LocalLimiter(10, 10 * 60 * 1000),
+  handoverPerId: new LocalLimiter(10, HANDOVER_TTL_MS),
   api: new LocalLimiter(600, 60 * 1000),
 };
 
@@ -51,6 +55,7 @@ export function createApp(deps: AppDeps) {
   const allowedOrigins = (env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   const staffList = parseStaffList(env.STAFF_EMAILS);
   const staffEnabled = Boolean(env.GOOGLE_CLIENT_ID && staffList.size > 0 && env.SESSION_KEY);
+  const reporterEnabled = Boolean(env.FIREBASE_PROJECT_ID && env.FIREBASE_API_KEY && env.SESSION_KEY);
   // Local-only staff login for automated tests: requires development mode AND no real (remote) data store.
   const devStaffLogin = isDev && (env as Record<string, unknown>).DEV_STAFF_LOGIN === '1' && (!env.GAS_URL || env.GAS_URL.startsWith('http://127.0.0.1'));
   const limiters = {
@@ -106,18 +111,43 @@ export function createApp(deps: AppDeps) {
     if (!s || s.t !== 'student') throw new HttpError(401, 'unauthorized', 'Your session has expired. Please verify your Complaint ID and PIN again.');
     return s;
   }
-  async function requireStaff(req: Request, role?: 'admin'): Promise<StaffSession> {
+  async function requireReporter(req: Request): Promise<ReporterSession> {
+    const s = await session(req);
+    if (!s || s.t !== 'reporter') throw new HttpError(401, 'unauthorized', 'Your verified phone session has expired. Please sign in again.');
+    return s;
+  }
+  async function requireStaff(req: Request, access: 'operator' | 'admin' | 'any' = 'operator'): Promise<StaffSession> {
     if (!staffEnabled && !devStaffLogin) throw new HttpError(503, 'staff_disabled', 'Staff access is disabled until it is configured.');
     const s = await session(req);
     if (!s || s.t !== 'staff') throw new HttpError(401, 'unauthorized', 'Staff sign-in required.');
     // Re-check the allowlist on every request so removing an email revokes access immediately.
     const current = devStaffLogin ? s.role : staffList.get(s.email);
     if (!current) throw new HttpError(403, 'forbidden', 'This account is not authorised for staff access.');
-    if (role === 'admin' && current !== 'admin') throw new HttpError(403, 'forbidden', 'Administrator access required.');
+    if (access === 'admin' && current !== 'admin') throw new HttpError(403, 'forbidden', 'Administrator access required.');
+    if (access === 'operator' && current === 'management') throw new HttpError(403, 'read_only', 'Management access is monitoring-only.');
     return { ...s, role: current };
   }
-  function log(actor: string, action: string, entity: string, entityId: string, details = ''): Op {
-    return { op: 'append', table: 'Activity_Log', row: { log_id: newId('LG'), created_at: iso(), actor, action, entity, entity_id: entityId, details: details.slice(0, 500) } };
+  async function requireManagement(req: Request): Promise<StaffSession> {
+    const s = await requireStaff(req, 'any');
+    if (s.role !== 'management' && s.role !== 'admin') throw new HttpError(403, 'forbidden', 'Management or administrator access required.');
+    return s;
+  }
+  function log(
+    actor: string,
+    action: string,
+    entity: string,
+    entityId: string,
+    details = '',
+    meta: { role?: string; before?: string; after?: string; auth?: string; evidence?: string; requestId?: string } = {},
+  ): Op {
+    return {
+      op: 'append', table: 'Activity_Log', row: {
+        log_id: newId('LG'), created_at: iso(), actor, action, entity, entity_id: entityId,
+        details: details.slice(0, 500), actor_role: meta.role ?? '', before_status: meta.before ?? '',
+        after_status: meta.after ?? '', authorization_result: meta.auth ?? 'allowed',
+        evidence_ref: meta.evidence ?? '', request_id: meta.requestId ?? '',
+      },
+    };
   }
   function update(cid: string, type: string, message: string, actor: string, opts: { itemId?: string; data?: unknown; visible?: boolean } = {}): Op {
     return {
@@ -226,6 +256,13 @@ export function createApp(deps: AppDeps) {
       contactPhone: settings.contact_phone,
       submissionsOpen: settings.submissions_open !== 'false',
       staff: { enabled: staffEnabled, googleClientId: staffEnabled ? env.GOOGLE_CLIENT_ID : null, devLogin: devStaffLogin },
+      reporterAuth: {
+        enabled: reporterEnabled,
+        projectId: reporterEnabled ? env.FIREBASE_PROJECT_ID : null,
+        apiKey: reporterEnabled ? env.FIREBASE_API_KEY : null,
+        authDomain: reporterEnabled ? (env.FIREBASE_AUTH_DOMAIN ?? `${env.FIREBASE_PROJECT_ID}.firebaseapp.com`) : null,
+        appId: reporterEnabled ? (env.FIREBASE_APP_ID ?? null) : null,
+      },
       turnstileSiteKey: env.TURNSTILE_SITE_KEY ?? null,
       environment: isDev ? 'development' : 'production',
     });
@@ -234,7 +271,264 @@ export function createApp(deps: AppDeps) {
   const health: Handler = async () => {
     const configured = Boolean(deps.store && env.PIN_PEPPER && env.SESSION_KEY);
     const reachable = deps.store ? await deps.store.ping() : false;
-    return json({ ok: configured && reachable, configured, storeReachable: reachable, staffEnabled, time: iso() }, configured && reachable ? 200 : 503);
+    return json({ ok: configured && reachable, configured, storeReachable: reachable, staffEnabled, reporterAuthEnabled: reporterEnabled, time: iso() }, configured && reachable ? 200 : 503);
+  };
+
+  // ------------------------------------------------------------ verified reporter identity (V2)
+  const reporterSession: Handler = async ({ req, ip }) => {
+    await limit(limiters.access, `otp-session:${ip}`);
+    if (!reporterEnabled) throw new HttpError(503, 'otp_disabled', 'Phone OTP access is not configured yet.');
+    const body = await readJson<{ idToken?: string; mode?: string; name?: string; studentId?: string; department?: string }>(req);
+    const mode = body?.mode === 'student' ? 'student' : body?.mode === 'guest' ? 'guest' : null;
+    if (!mode) throw new HttpError(422, 'validation_failed', 'Choose Student or Guest access.');
+    const claims = await verifyFirebasePhoneToken(String(body?.idToken ?? ''), env.FIREBASE_PROJECT_ID!, deps.fetchImpl);
+    const identityRef = `firebase:${claims.uid}`;
+    let name = String(body?.name ?? '').trim().slice(0, 80);
+    let studentId = '';
+    let department = '';
+    let identityStatus = 'Phone Verified Guest';
+
+    if (mode === 'student') {
+      const enteredId = String(body?.studentId ?? '').trim().toUpperCase();
+      const enteredDept = String(body?.department ?? '').trim().toLowerCase();
+      if (!enteredId || !enteredDept) throw new HttpError(422, 'validation_failed', 'Student ID and department are required.', { studentId: 'Required', department: 'Required' });
+      // The eight-tab Sheet layout is preserved. Approved registry entries are
+      // stored as protected Application_Settings rows named
+      // student_registry:<student-id>, with a JSON value. They are never
+      // editable from the public or management interfaces.
+      const rows = rowsOf((await exec([{ op: 'query', table: 'Application_Settings', limit: 5000 }]))[0]);
+      const match = rows
+        .filter((r) => r.key.startsWith('student_registry:'))
+        .map((r) => safeJson(r.value))
+        .find((r) => r.active !== false && String(r.phoneE164 ?? '') === claims.phoneNumber && String(r.studentId ?? '').toUpperCase() === enteredId && String(r.department ?? '').trim().toLowerCase() === enteredDept);
+      if (!match) {
+        await exec([log(identityRef, 'student_identity_denied', 'Identity', identityRef, `phone:${(await sha256Hex(claims.phoneNumber)).slice(0, 12)}`, { role: 'student', auth: 'denied' })]).catch(() => undefined);
+        throw new HttpError(403, 'student_not_verified', 'The verified phone, student ID and department do not match the approved college registry.');
+      }
+      name = String(match.name ?? '').slice(0, 80);
+      studentId = String(match.studentId ?? '').slice(0, 30);
+      department = String(match.department ?? '').slice(0, 80);
+      identityStatus = 'College Student Verified';
+    } else if (name.length < 2) {
+      throw new HttpError(422, 'validation_failed', 'Enter the guest name.', { name: 'At least 2 characters' });
+    }
+
+    const t = iso();
+    const identityKey = `identity:${claims.uid}`;
+    const existing = rowOf((await exec([{ op: 'get', table: 'Application_Settings', value: identityKey }]))[0]);
+    const existingValue = safeJson(existing?.value ?? '');
+    const value = JSON.stringify({
+      identityRef, phoneE164: claims.phoneNumber, kind: mode, name, studentId, department,
+      phoneVerifiedAt: new Date(claims.authTime * 1000).toISOString(),
+      createdAt: existingValue.createdAt || t, lastLoginAt: t, status: identityStatus,
+    });
+    const ops: Op[] = existing
+      ? [{ op: 'update', table: 'Application_Settings', value: identityKey, patch: { value, updated_at: t, updated_by: identityRef } }]
+      : [{ op: 'append', table: 'Application_Settings', row: { key: identityKey, value, updated_at: t, updated_by: identityRef } }];
+    ops.push(log(identityRef, 'reporter_login', 'Identity', identityRef, mode, { role: mode }));
+    mustOk(await exec(ops), ops.length, 'identity');
+    const exp = now() + REPORTER_TTL_MS;
+    const token = await signSession(secrets().sessionKey, { t: 'reporter', uid: claims.uid, role: mode, phone: claims.phoneNumber, name, studentId, department, identityRef, exp });
+    return json({ ok: true, token, expiresAt: exp, role: mode, name, phone: claims.phoneNumber, studentId, department, identityStatus });
+  };
+
+  const devReporterSession: Handler = async ({ req }) => {
+    if (!devStaffLogin) throw new HttpError(404, 'not_found', 'Not found');
+    const body = await readJson<{ role?: string; uid?: string; name?: string }>(req);
+    const role = body?.role === 'guest' ? 'guest' : 'student';
+    const uid = String(body?.uid ?? `dev-${role}`);
+    const name = String(body?.name ?? (role === 'guest' ? 'Development Guest' : 'Development Student'));
+    const exp = now() + REPORTER_TTL_MS;
+    const s: ReporterSession = {
+      t: 'reporter', uid, role, phone: '+919876543210', name,
+      studentId: role === 'student' ? '22CSE104' : '', department: role === 'student' ? 'CSE' : '',
+      identityRef: `firebase:${uid}`, exp,
+    };
+    return json({ ok: true, token: await signSession(secrets().sessionKey, s), expiresAt: exp, role, name, phone: s.phone, studentId: s.studentId, department: s.department, identityStatus: role === 'student' ? 'College Student Verified' : 'Phone Verified Guest' });
+  };
+
+  const reporterMe: Handler = async ({ req }) => {
+    const s = await requireReporter(req);
+    return json({ ok: true, role: s.role, name: s.name, phone: s.phone, studentId: s.studentId, department: s.department, identityRef: s.identityRef, expiresAt: s.exp, identityStatus: s.role === 'student' ? 'College Student Verified' : 'Phone Verified Guest' });
+  };
+
+  const createReporterComplaint: Handler = async ({ req, ip }) => {
+    await limit(limiters.submit, `report:${ip}`);
+    const s = await requireReporter(req);
+    const body = await readJson<Record<string, unknown>>(req, 4_500_000);
+    const idem = String(body.idempotencyKey ?? '');
+    if (!/^[0-9a-f-]{36}$/i.test(idem)) throw new HttpError(400, 'bad_request', 'Missing idempotency key.');
+    if (typeof body.website === 'string' && body.website) throw new HttpError(400, 'rejected', 'Submission rejected.');
+    if (typeof body.elapsedMs !== 'number' || body.elapsedMs < 2000) throw new HttpError(400, 'too_fast', 'Please review the report before submitting.');
+    const input = parse(complaintInput, {
+      ...body,
+      name: s.name,
+      studentId: s.role === 'student' ? s.studentId : 'GUEST',
+      department: s.role === 'student' ? s.department : 'Visitor',
+      phone: s.phone,
+      email: String(body.email ?? ''),
+    });
+    const settings = await getSettings();
+    if (settings.submissions_open === 'false') throw new HttpError(503, 'submissions_closed', 'New complaints are temporarily paused by the office.');
+    let photoFileId = '';
+    if (body.photo) {
+      const img = parse(imageUpload, body.photo);
+      checkImage(img);
+      photoFileId = await store().uploadFile(`complaint-${idem.slice(0, 8)}.${img.mime.split('/')[1]}`, img.mime, img.dataBase64);
+    }
+    const existing = rowsOf((await exec([{ op: 'query', table: 'Complaints', where: { idempotency_key: idem }, limit: 1 }]))[0])[0];
+    if (existing) {
+      if (existing.reporter_uid !== s.uid) throw new HttpError(409, 'duplicate', 'This submission key is already in use.');
+      return json({ ok: true, complaintId: existing.complaint_id, createdAt: existing.created_at, replayed: true });
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const cid = newComplaintId();
+      const t = iso();
+      const result = await exec([
+        { op: 'append', table: 'Complaints', unique: 'idempotency_key', row: {
+          complaint_id: cid, created_at: t, updated_at: t, status: 'Submitted', idempotency_key: idem,
+          name: s.name, student_id: s.role === 'student' ? s.studentId : '', department: s.role === 'student' ? s.department : '',
+          phone: s.phone, email: input.email, category: input.category, item_name: input.itemName,
+          description: input.description, color_features: input.colorFeatures, last_seen_location: input.lastSeenLocation,
+          lost_date: input.lostDate, lost_time: input.lostTime, photo_file_id: photoFileId,
+          ownership_evidence: input.ownershipEvidence, extra_info: '', linked_item_id: '', collection_instructions: '',
+          staff_notes: '', retention_until: '', version: '1', reporter_uid: s.uid, reporter_kind: s.role,
+          reporter_phone: s.phone, reporter_verified_at: t, identity_ref: s.identityRef,
+          identity_status: s.role === 'student' ? 'College Student Verified' : 'Phone Verified Guest',
+          submission_source: req.headers.get('x-capacitor-app') === 'true' ? 'android' : 'web', guest_ref: s.role === 'guest' ? s.identityRef : '',
+          deleted_at: '', deleted_by: '',
+        } },
+        update(cid, 'status', 'Complaint submitted', s.identityRef, { data: { status: 'Submitted' } }),
+        log(s.identityRef, 'complaint_submitted', 'Complaint', cid, `source:${req.headers.get('x-capacitor-app') === 'true' ? 'android' : 'web'}`, { role: s.role, after: 'Submitted' }),
+      ]);
+      if (result[0] && !result[0].ok && result[0].error === 'duplicate_key') continue;
+      mustOk(result, 3, 'complaint');
+      return json({ ok: true, complaintId: cid, createdAt: t }, 201);
+    }
+    throw new HttpError(503, 'id_generation_failed', 'Could not allocate a complaint reference. Please retry.');
+  };
+
+  async function ownedComplaint(s: ReporterSession, id: string): Promise<Row> {
+    const c = rowOf((await exec([{ op: 'get', table: 'Complaints', value: id }]))[0]);
+    if (!c || c.reporter_uid !== s.uid || c.deleted_at) throw new HttpError(404, 'not_found', 'Complaint not found.');
+    return c;
+  }
+
+  const reporterComplaints: Handler = async ({ req }) => {
+    const s = await requireReporter(req);
+    const rows = rowsOf((await exec([{ op: 'query', table: 'Complaints', where: { reporter_uid: s.uid }, limit: 100 }]))[0])
+      .filter((r) => !r.deleted_at)
+      .map((c) => ({ complaintId: c.complaint_id, createdAt: c.created_at, updatedAt: c.updated_at, status: c.status, category: c.category, itemName: c.item_name, lostDate: c.lost_date, lastSeenLocation: c.last_seen_location }));
+    return json({ ok: true, rows });
+  };
+
+  const reporterComplaint: Handler = async ({ req, params }) => {
+    const s = await requireReporter(req);
+    const c = await ownedComplaint(s, params.id);
+    const r = await exec([
+      { op: 'query', table: 'Complaint_Updates', where: { complaint_id: c.complaint_id }, limit: 200, order: 'asc' },
+      { op: 'query', table: 'Claim_Requests', where: { complaint_id: c.complaint_id }, limit: 50 },
+      { op: 'query', table: 'Handover_Records', where: { complaint_id: c.complaint_id }, limit: 20 },
+    ]);
+    const updates = rowsOf(r[0]);
+    const claims = rowsOf(r[1]);
+    const matches = [...activeMatches(updates).values()].map((u) => ({ itemId: u.item_id, proposedAt: u.created_at, note: u.message, item: safeJson(u.data_json), claimStatus: claims.find((cl) => cl.item_id === u.item_id && cl.status !== 'Withdrawn')?.status ?? null }));
+    return json({
+      ok: true, complaint: studentComplaint(c),
+      timeline: updates.filter((u) => u.type === 'status').map((u) => ({ status: String(safeJson(u.data_json).status ?? ''), at: u.created_at, message: u.message })),
+      notifications: updates.filter((u) => u.visible_to_student === 'true').reverse().slice(0, 50).map((u) => ({ id: u.update_id, type: u.type, message: u.message, at: u.created_at })),
+      matches,
+      claims: claims.map((cl) => ({ claimId: cl.claim_id, itemId: cl.item_id, status: cl.status, createdAt: cl.created_at, decisionNotes: ['Rejected', 'Approved'].includes(cl.status) ? cl.decision_notes : '' })),
+      handovers: rowsOf(r[2]).map((h) => ({ handoverId: h.handover_id, state: h.state, createdAt: h.created_at, receiverConfirmedAt: h.receiver_confirmed_at, staffConfirmedAt: h.staff_confirmed_at })),
+      identityStatus: s.role === 'student' ? 'College Student Verified' : 'Phone Verified Guest',
+    });
+  };
+
+  const reporterClaim: Handler = async ({ req, params }) => {
+    const s = await requireReporter(req);
+    const body = await readJson(req);
+    const input = parse(claimInput, body);
+    const c = await ownedComplaint(s, params.id);
+    const r0 = await exec([
+      { op: 'query', table: 'Complaint_Updates', where: { complaint_id: c.complaint_id }, limit: 200 },
+      { op: 'query', table: 'Claim_Requests', where: { complaint_id: c.complaint_id }, limit: 50 },
+    ]);
+    if (!activeMatches(rowsOf(r0[0])).has(input.itemId)) throw new HttpError(404, 'not_found', 'This item is not an approved potential match for your complaint.');
+    if (rowsOf(r0[1]).some((cl) => cl.item_id === input.itemId && ['Pending', 'Approved', 'Completed'].includes(cl.status))) throw new HttpError(409, 'already_claimed', 'A claim already exists for this item.');
+    transition(c.status, 'Ownership Verification');
+    const claimId = newId('CL');
+    const t = iso();
+    const ops: Op[] = [
+      { op: 'update', table: 'Complaints', value: c.complaint_id, patch: { status: 'Ownership Verification', updated_at: t }, expectVersion: c.version },
+      { op: 'append', table: 'Claim_Requests', row: { claim_id: claimId, created_at: t, complaint_id: c.complaint_id, item_id: input.itemId, evidence: input.evidence, status: 'Pending', reviewed_by: '', reviewed_at: '', decision_notes: '', checks_json: '', version: '1' } },
+      update(c.complaint_id, 'status', 'Ownership evidence submitted for staff review.', s.identityRef, { itemId: input.itemId, data: { status: 'Ownership Verification' } }),
+      log(s.identityRef, 'claim_requested', 'Claim', claimId, `item ${input.itemId}`, { role: s.role, before: c.status, after: 'Ownership Verification' }),
+    ];
+    mustOk(await exec(ops), ops.length, 'claim');
+    return json({ ok: true, claimId }, 201);
+  };
+
+  const reporterClose: Handler = async ({ req, params }) => {
+    const s = await requireReporter(req);
+    const body = (await readJson<{ reason?: string }>(req)) ?? {};
+    const reason = String(body.reason ?? '').trim().slice(0, 300);
+    const c = await ownedComplaint(s, params.id);
+    if (['Returned', 'Closed', 'Rejected', 'Cancelled'].includes(c.status)) throw new HttpError(409, 'closed', 'This complaint can no longer be cancelled.');
+    const settings = await getSettings();
+    const t = iso();
+    const ops: Op[] = [
+      { op: 'update', table: 'Complaints', value: c.complaint_id, patch: { status: 'Cancelled', updated_at: t, retention_until: retentionUntil(settings) }, expectVersion: c.version },
+      update(c.complaint_id, 'status', reason ? `Cancelled by reporter: ${reason}` : 'Cancelled by reporter', s.identityRef, { data: { status: 'Cancelled' } }),
+      log(s.identityRef, 'complaint_cancelled', 'Complaint', c.complaint_id, reason, { role: s.role, before: c.status, after: 'Cancelled' }),
+    ];
+    mustOk(await exec(ops), ops.length, 'complaint');
+    return json({ ok: true });
+  };
+
+  const reporterPhoto: Handler = async ({ req, params }) => {
+    const s = await requireReporter(req);
+    const c = await ownedComplaint(s, params.id);
+    return fileResponse(c.photo_file_id);
+  };
+
+  const confirmHandover: Handler = async ({ req, params }) => {
+    const s = await requireReporter(req);
+    const body = await readJson<{ code?: string; receiverName?: string; acknowledgment?: string; ownerAuthorization?: string; evidence?: unknown }>(req, 4_500_000);
+    const code = String(body?.code ?? '').trim();
+    const receiverName = String(body?.receiverName ?? s.name).trim().slice(0, 80);
+    const acknowledgment = String(body?.acknowledgment ?? '').trim().slice(0, 1000);
+    const ownerAuthorization = String(body?.ownerAuthorization ?? '').trim().slice(0, 1000);
+    if (!/^\d{6}$/.test(code)) throw new HttpError(422, 'validation_failed', 'Enter the 6-digit handover code.', { code: '6 digits required' });
+    await limit(fallbackLimiters.handoverPerId, `handover:${params.id}`);
+    if (receiverName.length < 2 || acknowledgment.length < 10) throw new HttpError(422, 'validation_failed', 'Receiver name and acknowledgment are required.');
+    const h = rowOf((await exec([{ op: 'get', table: 'Handover_Records', value: params.id }]))[0]);
+    if (!h) throw new HttpError(404, 'not_found', 'Handover challenge not found.');
+    if (h.state !== 'challenge_issued' || h.challenge_used_at) throw new HttpError(409, 'challenge_used', 'This handover challenge has already been used or cancelled.');
+    if (!h.challenge_expires_at || Date.parse(h.challenge_expires_at) < now()) throw new HttpError(410, 'challenge_expired', 'This handover code has expired. Ask staff to issue a new one.');
+    const expected = await hmacHex(secrets().sessionKey, `handover:v1:${h.handover_id}:${code}`);
+    if (!safeEqual(expected, h.challenge_hash)) throw new HttpError(401, 'invalid_code', 'The handover code is incorrect.');
+    const c = rowOf((await exec([{ op: 'get', table: 'Complaints', value: h.complaint_id }]))[0]);
+    if (!c) throw new HttpError(404, 'not_found', 'Linked complaint not found.');
+    const isOwner = c.reporter_uid === s.uid;
+    if (!isOwner && ownerAuthorization.length < 10) throw new HttpError(422, 'proxy_authorization_required', 'Proxy collection requires the owner’s authorization.');
+    let evidenceFileId = '';
+    if (body?.evidence) {
+      const img = parse(imageUpload, body.evidence);
+      checkImage(img);
+      evidenceFileId = await store().uploadFile(`handover-${h.handover_id}.${img.mime.split('/')[1]}`, img.mime, img.dataBase64);
+    }
+    const t = iso();
+    const r = await exec([
+      { op: 'update', table: 'Handover_Records', value: h.handover_id, patch: {
+        state: 'receiver_confirmed', challenge_used_at: t, receiver_uid: s.uid, receiver_kind: s.role,
+        receiver_name: receiverName, receiver_confirmed_at: t, receiver_acknowledgment: acknowledgment,
+        receiver_evidence_file_id: evidenceFileId, owner_authorization: isOwner ? '' : ownerAuthorization,
+      }, expectVersion: h.version },
+      update(c.complaint_id, 'receiver_confirmation', 'Receiver confirmed the digital handover receipt. Staff release is still required.', s.identityRef, { itemId: h.item_id }),
+      log(s.identityRef, 'receiver_handover_confirmed', 'Handover', h.handover_id, isOwner ? 'owner' : 'proxy', { role: s.role, evidence: evidenceFileId }),
+    ]);
+    mustOk(r, 3, 'handover confirmation');
+    return json({ ok: true, handoverId: h.handover_id, receiverConfirmedAt: t, awaitingStaffRelease: true });
   };
 
   const createComplaint: Handler = async ({ req, ip }) => {
@@ -467,13 +761,13 @@ export function createApp(deps: AppDeps) {
     if (!devStaffLogin) throw new HttpError(404, 'not_found', 'Not found');
     const body = await readJson<{ email?: string; role?: string }>(req);
     const email = String(body?.email ?? 'dev.staff@example.edu').toLowerCase();
-    const role = body?.role === 'staff' ? 'staff' : 'admin';
+    const role = body?.role === 'staff' ? 'staff' : body?.role === 'management' ? 'management' : 'admin';
     const exp = now() + STAFF_TTL_MS;
     return json({ ok: true, token: await signSession(secrets().sessionKey, { t: 'staff', email, role, exp }), email, role, name: 'Development Staff', expiresAt: exp });
   };
 
   const staffMe: Handler = async ({ req }) => {
-    const s = await requireStaff(req);
+    const s = await requireStaff(req, 'any');
     return json({ ok: true, email: s.email, role: s.role, expiresAt: s.exp });
   };
 
@@ -557,7 +851,7 @@ export function createApp(deps: AppDeps) {
   const setStatus: Handler = async ({ req, params }) => {
     const s = await requireStaff(req);
     const input = parse(statusUpdateInput, await readJson(req));
-    if (['Awaiting Verification', 'Ready for Collection', 'Returned'].includes(input.status)) {
+    if (['Ownership Verification', 'Awaiting Verification', 'Ready for Collection', 'Awaiting Receiver Confirmation', 'Returned'].includes(input.status)) {
       throw new HttpError(409, 'use_workflow', 'This status is set by the claim verification and handover workflow.');
     }
     const c = rowOf((await exec([{ op: 'get', table: 'Complaints', value: params.id }]))[0]);
@@ -565,7 +859,7 @@ export function createApp(deps: AppDeps) {
     transition(c.status, input.status);
     const settings = await getSettings();
     const patch: Row = { status: input.status, updated_at: iso() };
-    if (input.status === 'Closed') patch.retention_until = retentionUntil(settings);
+    if (['Closed', 'Rejected', 'Cancelled'].includes(input.status)) patch.retention_until = retentionUntil(settings);
     if (input.note) patch.staff_notes = (c.staff_notes ? c.staff_notes + '\n' : '') + `[${iso().slice(0, 16)} ${s.email}] ${input.note}`;
     const r = await exec([
       { op: 'update', table: 'Complaints', value: c.complaint_id, patch, expectVersion: c.version },
@@ -792,7 +1086,7 @@ export function createApp(deps: AppDeps) {
       }
       if (rowsOf(r1[2]).length) throw new HttpError(409, 'conflict', 'Another claim for this item is already approved.');
       transition(c.status, 'Ready for Collection');
-      const instructions = input.collectionInstructions || `Collect from ${settings.collection_office} (${settings.collection_hours}). Bring your college ID card and your Complaint ID. Your PIN is not needed at the counter — never share it.`;
+      const instructions = input.collectionInstructions || `Collect from ${settings.collection_office} (${settings.collection_hours}). Bring a physical college ID or government ID and your Complaint ID. The receiver must complete the verified-phone handover confirmation before staff release.`;
       const r = await exec([
         { op: 'update', table: 'Claim_Requests', value: cl.claim_id, patch: { status: 'Approved', reviewed_by: s.email, reviewed_at: t, decision_notes: input.notes, checks_json: JSON.stringify(ch) }, expectVersion: cl.version },
         { op: 'update', table: 'Complaints', value: c.complaint_id, patch: { status: 'Ready for Collection', linked_item_id: f.item_id, collection_instructions: instructions, updated_at: t }, expectVersion: c.version },
@@ -825,16 +1119,22 @@ export function createApp(deps: AppDeps) {
     return json({ ok: true, ready: rowsOf(r[0]), recent: rowsOf(r[1]) });
   };
 
-  const createHandover: Handler = async ({ req }) => {
+  const createHandoverChallenge: Handler = async ({ req }) => {
     const s = await requireStaff(req);
-    const input = parse(handoverInput, await readJson(req));
-    const cl = rowOf((await exec([{ op: 'get', table: 'Claim_Requests', value: input.claimId }]))[0]);
+    const body = await readJson<{ claimId?: string }>(req);
+    const claimId = String(body?.claimId ?? '');
+    if (!/^CL-[0-9A-HJKMNP-TV-Z]{8}$/.test(claimId)) throw new HttpError(422, 'validation_failed', 'Choose an approved claim.');
+    const r0 = await exec([
+      { op: 'get', table: 'Claim_Requests', value: claimId },
+      { op: 'query', table: 'Handover_Records', where: { claim_id: claimId }, limit: 20 },
+    ]);
+    const cl = rowOf(r0[0]);
     if (!cl) throw new HttpError(404, 'not_found', 'Claim not found.');
-    if (cl.status !== 'Approved') throw new HttpError(409, 'not_approved', 'Only approved claims can be handed over.');
-    const settings = await getSettings();
-    if (settings.require_two_staff === 'true' && cl.reviewed_by === s.email) {
-      throw new HttpError(409, 'two_staff_required', 'A different staff member must complete the handover.');
-    }
+    if (cl.status !== 'Approved') throw new HttpError(409, 'not_approved', 'Only approved claims can start a handover.');
+    const prior = rowsOf(r0[1]);
+    const active = prior.find((h) => !h.staff_confirmed_at && (h.state === 'receiver_confirmed' || (h.state === 'challenge_issued' && Date.parse(h.challenge_expires_at) > now())));
+    if (active) throw new HttpError(409, 'handover_in_progress', 'A handover challenge already exists for this claim.');
+    const expired = prior.find((h) => h.state === 'challenge_issued' && !h.challenge_used_at && Date.parse(h.challenge_expires_at) <= now());
     const r1 = await exec([
       { op: 'get', table: 'Complaints', value: cl.complaint_id },
       { op: 'get', table: 'Found_Items', value: cl.item_id },
@@ -842,20 +1142,67 @@ export function createApp(deps: AppDeps) {
     const c = rowOf(r1[0]);
     const f = rowOf(r1[1]);
     if (!c || !f) throw new HttpError(404, 'not_found', 'Linked complaint or item missing.');
-    transition(c.status, 'Returned');
+    if (c.status !== 'Awaiting Receiver Confirmation') transition(c.status, 'Awaiting Receiver Confirmation');
     const t = iso();
     const handoverId = newId('HO');
-    const r = await exec([
+    const code = newHandoverCode();
+    const expiresAt = new Date(now() + HANDOVER_TTL_MS).toISOString();
+    const challengeHash = await hmacHex(secrets().sessionKey, `handover:v1:${handoverId}:${code}`);
+    const ops: Op[] = [
+      { op: 'update', table: 'Complaints', value: c.complaint_id, patch: { status: 'Awaiting Receiver Confirmation', updated_at: t }, expectVersion: c.version },
+      { op: 'append', table: 'Handover_Records', row: {
+        handover_id: handoverId, created_at: t, complaint_id: c.complaint_id, item_id: f.item_id, claim_id: cl.claim_id,
+        receiver_name: '', receiver_id_checked: 'false', approved_by: cl.reviewed_by, handed_over_by: '', notes: '',
+        state: 'challenge_issued', challenge_hash: challengeHash, challenge_expires_at: expiresAt,
+        challenge_used_at: '', receiver_uid: '', receiver_kind: '', receiver_confirmed_at: '',
+        receiver_acknowledgment: '', receiver_evidence_file_id: '', owner_authorization: '',
+        staff_confirmed_at: '', version: '1',
+      } },
+      update(c.complaint_id, c.status === 'Awaiting Receiver Confirmation' ? 'handover_code_reissued' : 'status', c.status === 'Awaiting Receiver Confirmation' ? 'The expired collection code was replaced. Use the new code shown by staff.' : 'Collection started. The receiver must confirm the digital receipt before staff release.', s.email, { itemId: f.item_id, data: { status: 'Awaiting Receiver Confirmation', handoverId } }),
+      log(s.email, 'handover_challenge_issued', 'Handover', handoverId, `${c.complaint_id} / ${f.item_id}`, { role: s.role, before: c.status, after: 'Awaiting Receiver Confirmation' }),
+    ];
+    if (expired) ops.unshift({ op: 'update', table: 'Handover_Records', value: expired.handover_id, patch: { state: 'expired', challenge_used_at: t }, expectVersion: expired.version });
+    const r = await exec(ops);
+    mustOk(r, ops.length, 'handover');
+    dashCache = null;
+    // Code is shown once to the staff member at the physical counter. Only its
+    // keyed hash is stored; the receiver enters it in their verified session.
+    return json({ ok: true, handoverId, code, expiresAt }, 201);
+  };
+
+  const completeHandover: Handler = async ({ req, params }) => {
+    const s = await requireStaff(req);
+    const body = await readJson<{ receiverIdChecked?: boolean; notes?: string }>(req);
+    if (body?.receiverIdChecked !== true) throw new HttpError(422, 'identity_check_required', 'Staff must physically check the receiver before release.');
+    const notes = String(body?.notes ?? '').trim().slice(0, 500);
+    const h = rowOf((await exec([{ op: 'get', table: 'Handover_Records', value: params.id }]))[0]);
+    if (!h) throw new HttpError(404, 'not_found', 'Handover not found.');
+    if (h.state !== 'receiver_confirmed' || !h.receiver_confirmed_at) throw new HttpError(409, 'receiver_not_confirmed', 'The receiver must confirm the handover first.');
+    const settings = await getSettings();
+    if (settings.require_two_staff === 'true' && h.approved_by === s.email) throw new HttpError(409, 'two_staff_required', 'A different staff member must release the item.');
+    const r0 = await exec([
+      { op: 'get', table: 'Claim_Requests', value: h.claim_id },
+      { op: 'get', table: 'Complaints', value: h.complaint_id },
+      { op: 'get', table: 'Found_Items', value: h.item_id },
+    ]);
+    const cl = rowOf(r0[0]);
+    const c = rowOf(r0[1]);
+    const f = rowOf(r0[2]);
+    if (!cl || !c || !f) throw new HttpError(404, 'not_found', 'Linked claim, complaint or item is missing.');
+    if (cl.status !== 'Approved' || c.status !== 'Awaiting Receiver Confirmation' || f.status !== 'Claimed') throw new HttpError(409, 'state_conflict', 'The handover records are not in a releasable state.');
+    transition(c.status, 'Returned');
+    const t = iso();
+    const ops: Op[] = [
       { op: 'update', table: 'Claim_Requests', value: cl.claim_id, patch: { status: 'Completed' }, expectVersion: cl.version },
       { op: 'update', table: 'Complaints', value: c.complaint_id, patch: { status: 'Returned', updated_at: t, retention_until: retentionUntil(settings) }, expectVersion: c.version },
       { op: 'update', table: 'Found_Items', value: f.item_id, patch: { status: 'Returned', updated_at: t } },
-      { op: 'append', table: 'Handover_Records', row: { handover_id: handoverId, created_at: t, complaint_id: c.complaint_id, item_id: f.item_id, claim_id: cl.claim_id, receiver_name: input.receiverName, receiver_id_checked: 'true', approved_by: cl.reviewed_by, handed_over_by: s.email, notes: input.notes } },
-      update(c.complaint_id, 'status', 'Item handed over to you. Thank you for using FindBack.', s.email, { itemId: f.item_id, data: { status: 'Returned' } }),
-      log(s.email, 'item_handed_over', 'Handover', handoverId, `${c.complaint_id} / ${f.item_id}`),
-    ]);
-    mustOk(r, 6, 'handover');
+      { op: 'update', table: 'Handover_Records', value: h.handover_id, patch: { state: 'returned', receiver_id_checked: 'true', handed_over_by: s.email, staff_confirmed_at: t, notes }, expectVersion: h.version },
+      update(c.complaint_id, 'status', 'The receiver and staff both confirmed the return. Item marked Returned.', s.email, { itemId: f.item_id, data: { status: 'Returned' } }),
+      log(s.email, 'item_handed_over', 'Handover', h.handover_id, `${c.complaint_id} / ${f.item_id}`, { role: s.role, before: c.status, after: 'Returned', evidence: h.receiver_evidence_file_id }),
+    ];
+    mustOk(await exec(ops), ops.length, 'handover');
     dashCache = null;
-    return json({ ok: true, handoverId }, 201);
+    return json({ ok: true, handoverId: h.handover_id, returnedAt: t });
   };
 
   const unclaimed: Handler = async ({ req }) => {
@@ -881,11 +1228,11 @@ export function createApp(deps: AppDeps) {
     const r = await exec([
       { op: 'query', table: 'Complaints', columns: ['created_at', 'status', 'category', 'updated_at'], limit: 5000 },
       { op: 'query', table: 'Found_Items', columns: ['created_at', 'status', 'category'], limit: 5000 },
-      { op: 'query', table: 'Handover_Records', columns: ['created_at', 'complaint_id'], limit: 5000 },
+      { op: 'query', table: 'Handover_Records', columns: ['created_at', 'complaint_id', 'state', 'handed_over_by', 'staff_confirmed_at'], limit: 5000 },
     ]);
     const complaints = rowsOf(r[0]);
     const items = rowsOf(r[1]);
-    const handovers = rowsOf(r[2]);
+    const handovers = rowsOf(r[2]).filter((h) => h.state === 'returned' || (!h.state && h.handed_over_by));
     const byCategory: Record<string, { lost: number; found: number }> = {};
     for (const c of complaints) (byCategory[c.category] ??= { lost: 0, found: 0 }).lost++;
     for (const f of items) (byCategory[f.category] ??= { lost: 0, found: 0 }).found++;
@@ -894,12 +1241,12 @@ export function createApp(deps: AppDeps) {
       const start = now() - (w + 1) * 7 * 86400e3;
       const end = now() - w * 7 * 86400e3;
       const inRange = (s: string) => { const t = Date.parse(s); return t >= start && t < end; };
-      weeks.push({ week: new Date(start).toISOString().slice(0, 10), complaints: complaints.filter((c) => inRange(c.created_at)).length, found: items.filter((f) => inRange(f.created_at)).length, returned: handovers.filter((h) => inRange(h.created_at)).length });
+      weeks.push({ week: new Date(start).toISOString().slice(0, 10), complaints: complaints.filter((c) => inRange(c.created_at)).length, found: items.filter((f) => inRange(f.created_at)).length, returned: handovers.filter((h) => inRange(h.staff_confirmed_at || h.created_at)).length });
     }
     const createdById = new Map<string, string>();
     const created = rowsOf((await exec([{ op: 'query', table: 'Complaints', columns: ['complaint_id', 'created_at'], limit: 5000 }]))[0]);
     for (const c of created) createdById.set(c.complaint_id, c.created_at);
-    const durations = handovers.map((h) => (Date.parse(h.created_at) - Date.parse(createdById.get(h.complaint_id) ?? h.created_at)) / 86400e3).filter((d) => d >= 0);
+    const durations = handovers.map((h) => (Date.parse(h.staff_confirmed_at || h.created_at) - Date.parse(createdById.get(h.complaint_id) ?? h.created_at)) / 86400e3).filter((d) => d >= 0);
     const returned = complaints.filter((c) => c.status === 'Returned').length;
     return json({
       ok: true,
@@ -909,6 +1256,115 @@ export function createApp(deps: AppDeps) {
       byCategory,
       weeks,
     });
+  };
+
+  // ------------------------------------------------------------ management (server-enforced read-only)
+  const managementOverview: Handler = async ({ req }) => {
+    await requireManagement(req);
+    const r = await exec([
+      { op: 'query', table: 'Complaints', columns: ['complaint_id', 'created_at', 'updated_at', 'status', 'category', 'item_name', 'name', 'student_id', 'department', 'reporter_kind', 'identity_status'], limit: 5000 },
+      { op: 'query', table: 'Found_Items', columns: ['item_id', 'created_at', 'status', 'category'], limit: 5000 },
+      { op: 'query', table: 'Claim_Requests', columns: ['claim_id', 'created_at', 'status', 'reviewed_by', 'reviewed_at'], limit: 5000 },
+      { op: 'query', table: 'Handover_Records', columns: ['handover_id', 'created_at', 'state', 'approved_by', 'handed_over_by', 'receiver_confirmed_at', 'staff_confirmed_at'], limit: 5000 },
+    ]);
+    const complaints = rowsOf(r[0]);
+    const items = rowsOf(r[1]);
+    const claims = rowsOf(r[2]);
+    const handovers = rowsOf(r[3]);
+    const byStatus: Record<string, number> = {};
+    for (const c of complaints) byStatus[c.status] = (byStatus[c.status] ?? 0) + 1;
+    return json({
+      ok: true,
+      totals: {
+        complaints: complaints.length,
+        pending: complaints.filter((c) => !['Returned', 'Closed', 'Rejected', 'Cancelled'].includes(c.status)).length,
+        returned: complaints.filter((c) => c.status === 'Returned' || c.status === 'Closed').length,
+        foundItems: items.length,
+        pendingClaims: claims.filter((c) => c.status === 'Pending').length,
+        handovers: handovers.filter((h) => h.state === 'returned' || (!h.state && h.handed_over_by)).length,
+      },
+      byStatus,
+      recentCases: complaints.slice(0, 10).map((c) => ({
+        complaintId: c.complaint_id, createdAt: c.created_at, status: c.status, category: c.category,
+        itemName: c.item_name, submittedBy: c.name, studentId: c.student_id, department: c.department,
+        reporterKind: c.reporter_kind || 'legacy', identityStatus: c.identity_status || 'Legacy complaint access',
+      })),
+    });
+  };
+
+  const managementAnalytics: Handler = async ({ req }) => {
+    await requireManagement(req);
+    const r = await exec([
+      { op: 'query', table: 'Complaints', columns: ['complaint_id', 'created_at', 'status', 'category'], limit: 5000 },
+      { op: 'query', table: 'Found_Items', columns: ['created_at', 'status', 'category'], limit: 5000 },
+      { op: 'query', table: 'Handover_Records', columns: ['created_at', 'complaint_id', 'state', 'staff_confirmed_at'], limit: 5000 },
+    ]);
+    const complaints = rowsOf(r[0]);
+    const items = rowsOf(r[1]);
+    const handovers = rowsOf(r[2]).filter((h) => h.state === 'returned' || (!h.state && h.created_at));
+    const byCategory: Record<string, { lost: number; found: number }> = {};
+    for (const c of complaints) (byCategory[c.category] ??= { lost: 0, found: 0 }).lost++;
+    for (const f of items) (byCategory[f.category] ??= { lost: 0, found: 0 }).found++;
+    const weeks: { week: string; complaints: number; found: number; returned: number }[] = [];
+    for (let w = 11; w >= 0; w--) {
+      const start = now() - (w + 1) * 7 * 86400e3;
+      const end = now() - w * 7 * 86400e3;
+      const inside = (value: string) => { const n = Date.parse(value); return n >= start && n < end; };
+      weeks.push({ week: new Date(start).toISOString().slice(0, 10), complaints: complaints.filter((c) => inside(c.created_at)).length, found: items.filter((f) => inside(f.created_at)).length, returned: handovers.filter((h) => inside(h.staff_confirmed_at || h.created_at)).length });
+    }
+    return json({ ok: true, totals: { complaints: complaints.length, foundItems: items.length, handovers: handovers.length }, recoveryRate: complaints.length ? Math.round(handovers.length / complaints.length * 1000) / 10 : 0, byCategory, weeks });
+  };
+
+  const managementHotspots: Handler = async ({ req }) => {
+    await requireManagement(req);
+    const r = await exec([
+      { op: 'query', table: 'Complaints', columns: ['last_seen_location'], limit: 5000 },
+      { op: 'query', table: 'Found_Items', columns: ['found_location'], limit: 5000 },
+    ]);
+    const locations = new Map<string, { lost: number; found: number }>();
+    for (const c of rowsOf(r[0])) if (c.last_seen_location) (locations.get(c.last_seen_location) ?? (locations.set(c.last_seen_location, { lost: 0, found: 0 }), locations.get(c.last_seen_location)!)).lost++;
+    for (const f of rowsOf(r[1])) if (f.found_location) (locations.get(f.found_location) ?? (locations.set(f.found_location, { lost: 0, found: 0 }), locations.get(f.found_location)!)).found++;
+    const rows = [...locations].map(([location, v]) => ({ location, ...v, total: v.lost + v.found })).sort((a, b) => b.total - a.total).slice(0, 50);
+    return json({ ok: true, rows });
+  };
+
+  const managementAudit: Handler = async ({ req, url }) => {
+    await requireManagement(req);
+    const page = Math.max(1, parseInt(url.searchParams.get('page') ?? '1', 10) || 1);
+    const r = await exec([{ op: 'query', table: 'Activity_Log', offset: (page - 1) * 50, limit: 50 }]);
+    return json({ ok: true, rows: rowsOf(r[0]), total: (r[0] as { total?: number }).total ?? 0, page, pageSize: 50 });
+  };
+
+  const managementPolicies: Handler = async ({ req }) => {
+    await requireManagement(req);
+    const settings = await getSettings();
+    return json({
+      ok: true,
+      policies: {
+        collectionOffice: settings.collection_office, collectionHours: settings.collection_hours,
+        unclaimedDays: settings.unclaimed_days, retentionDays: settings.retention_days,
+        twoStaffRequired: settings.require_two_staff === 'true', submissionsOpen: settings.submissions_open !== 'false',
+      },
+      security: {
+        otp: reporterEnabled ? 'Firebase phone OTP enabled' : 'Not configured',
+        managementAuthorization: 'Server-enforced read-only role',
+        audit: 'Append-only through application APIs', storage: 'Private Cloud Storage', database: 'Private Google Sheets',
+      },
+    });
+  };
+
+  const managementExport: Handler = async ({ req, url }) => {
+    await requireManagement(req);
+    const type = url.searchParams.get('type') ?? 'complaints';
+    const spec = type === 'audit'
+      ? { table: 'Activity_Log' as const, columns: ['created_at', 'actor', 'actor_role', 'action', 'entity', 'entity_id', 'before_status', 'after_status', 'authorization_result'] }
+      : type === 'handovers'
+        ? { table: 'Handover_Records' as const, columns: ['handover_id', 'created_at', 'complaint_id', 'item_id', 'state', 'approved_by', 'handed_over_by', 'receiver_confirmed_at', 'staff_confirmed_at'] }
+        : { table: 'Complaints' as const, columns: ['complaint_id', 'created_at', 'status', 'category', 'item_name', 'name', 'student_id', 'department', 'reporter_kind', 'identity_status'] };
+    const rows = rowsOf((await exec([{ op: 'query', table: spec.table, columns: spec.columns, limit: 5000, order: 'asc' }]))[0]);
+    const quote = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = [spec.columns.join(','), ...rows.map((row) => spec.columns.map((c) => quote(row[c])).join(','))].join('\r\n');
+    return new Response(csv, { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="findback-${type}-${iso().slice(0, 10)}.csv"` } });
   };
 
   const getSettingsRoute: Handler = async ({ req }) => {
@@ -955,6 +1411,16 @@ export function createApp(deps: AppDeps) {
   const routes: [string, RegExp, Handler][] = [
     ['GET', /^\/api\/health$/, health],
     ['GET', /^\/api\/public\/config$/, publicConfig],
+    ['POST', /^\/api\/v2\/auth\/session$/, reporterSession],
+    ['POST', /^\/api\/v2\/auth\/dev-session$/, devReporterSession],
+    ['GET', /^\/api\/v2\/me$/, reporterMe],
+    ['POST', /^\/api\/v2\/complaints$/, createReporterComplaint],
+    ['GET', /^\/api\/v2\/complaints$/, reporterComplaints],
+    ['GET', /^\/api\/v2\/complaints\/(?<id>FB-[0-9A-Z-]{9})$/, reporterComplaint],
+    ['POST', /^\/api\/v2\/complaints\/(?<id>FB-[0-9A-Z-]{9})\/claim$/, reporterClaim],
+    ['POST', /^\/api\/v2\/complaints\/(?<id>FB-[0-9A-Z-]{9})\/close$/, reporterClose],
+    ['GET', /^\/api\/v2\/complaints\/(?<id>FB-[0-9A-Z-]{9})\/photo$/, reporterPhoto],
+    ['POST', /^\/api\/v2\/handovers\/(?<id>HO-[0-9A-Z]{8})\/confirm$/, confirmHandover],
     ['POST', /^\/api\/complaints$/, createComplaint],
     ['POST', /^\/api\/access$/, access],
     ['GET', /^\/api\/portal$/, portal],
@@ -980,7 +1446,8 @@ export function createApp(deps: AppDeps) {
     ['GET', /^\/api\/staff\/claims$/, listClaims],
     ['POST', /^\/api\/staff\/claims\/(?<id>CL-[0-9A-Z]{8})\/decision$/, decideClaim],
     ['GET', /^\/api\/staff\/handovers$/, listHandovers],
-    ['POST', /^\/api\/staff\/handovers$/, createHandover],
+    ['POST', /^\/api\/staff\/handovers$/, createHandoverChallenge],
+    ['POST', /^\/api\/staff\/handovers\/(?<id>HO-[0-9A-Z]{8})\/complete$/, completeHandover],
     ['GET', /^\/api\/staff\/unclaimed$/, unclaimed],
     ['GET', /^\/api\/staff\/activity$/, activity],
     ['GET', /^\/api\/staff\/analytics$/, analytics],
@@ -988,6 +1455,12 @@ export function createApp(deps: AppDeps) {
     ['POST', /^\/api\/staff\/settings$/, saveSettings],
     ['POST', /^\/api\/staff\/backup$/, backup],
     ['GET', /^\/api\/staff\/files\/(?<id>[A-Za-z0-9_-]{8,100})$/, staffFile],
+    ['GET', /^\/api\/management\/overview$/, managementOverview],
+    ['GET', /^\/api\/management\/analytics$/, managementAnalytics],
+    ['GET', /^\/api\/management\/hotspots$/, managementHotspots],
+    ['GET', /^\/api\/management\/audit$/, managementAudit],
+    ['GET', /^\/api\/management\/policies$/, managementPolicies],
+    ['GET', /^\/api\/management\/export$/, managementExport],
   ];
 
   return async function handle(req: Request): Promise<Response> {

@@ -1,54 +1,46 @@
 # Operations
 
-## Backups & recovery
-- **Automatic**: `dailyBackup` copies the spreadsheet into *FindBack Backups (private)* at 02:00 daily, keeping 14 copies. Admins can trigger one from **Staff → Settings → Create backup now**.
-- **Restore**: open the chosen backup in Drive and copy the affected rows (or a whole tab) back into the live sheet. If the live spreadsheet is lost, set the Apps Script property `FB_SPREADSHEET_ID` to a backup copy's ID (Project settings → Script properties) — the web app then serves from it immediately.
-- **Export**: *File → Download → .xlsx/.csv* from the private sheet (staff with sheet access only). Treat exports as personal data.
-- **Lost PINs**: never recoverable. Staff verify the student in person and use *Complaint → Staff-assisted PIN reset*; the old PIN and sessions stop working and the action is logged.
+## Backups and recovery
+
+- **On demand:** Main Admin can create a complete JSON snapshot from **Settings → Create backup now**. Cloud Run writes it to the private bucket under `backups/`; the API service identity is the only runtime principal with object access.
+- **Scheduled backup gate:** configure an institution-approved daily scheduler before launch, then verify a backup can be restored into a copy of the Sheet. The application does not pretend a browser or scale-to-zero Cloud Run timer is a reliable scheduler.
+- **Restore:** restore first into a private test spreadsheet, run the schema check and compare record counts before changing the production `SHEET_ID`. Treat every export as personal data.
+- **Legacy credentials:** Complaint ID + PIN applies only to pre-V2 records. New records use verified-phone reporter sessions.
 
 ## Retention
-- When a complaint becomes Returned or Closed, `retention_until` = now + `retention_days` (Settings, default 180).
-- `retentionSweep` (03:00 daily) replaces name, student ID, phone, email, ownership evidence and extra info with `[redacted]` and trashes the photo; anonymous fields remain for analytics.
-- Unclaimed found items appear under **Staff → Unclaimed items** after `unclaimed_days` (default 60) for documented donation/disposal.
+
+- Returned, Closed or reporter-cancelled complaints receive `retention_until` using the configured retention period (default 180 days).
+- The Cloud Run process runs a due-record sweep after startup and daily while active. A missed sweep is date-based and catches up on the next active run. Production should also invoke and monitor retention through the institution's approved scheduler.
+- The sweep redacts the reporter name, student ID, phone, email, ownership evidence and extra information, and removes the complaint photo. Anonymous operational fields remain available for reporting.
+- Unclaimed found items appear in the Main Admin queue after the configured period (default 60 days); donation/disposal still requires a documented staff decision.
 
 ## Failure behaviour
-- Apps Script busy / quota / outage → Worker retries with jittered backoff (3 attempts), then returns `503` with a clear message. The frontend never shows success unless the Worker confirmed the write. Submissions carry an idempotency key, so retries cannot create duplicates (a replay returns the same Complaint ID with a fresh PIN because the first was never seen).
-- Concurrent edits use optimistic versions (`version` column) → `409 conflict` asks staff to refresh.
+
+- Google Sheets or Cloud Storage quota/outage errors return a clear `503`; the frontend does not show success until the API confirms the write.
+- Complaint submissions carry an idempotency key so a safe retry cannot create a duplicate record.
+- Concurrent edits use the `version` column. A stale staff action returns `409 conflict` and must be refreshed, not silently overwritten.
+- Production logs contain request IDs and authorization outcomes, not OTPs, receiver codes, ownership evidence or request bodies.
 
 ## Capacity
 
-Measured with `npm run test:load` against the real Worker code and the real `Code.gs` in the emulator, **modelling** Apps Script with ~900 ms per call (±25 %), a 30-simultaneous-execution cap and serialised writes (`docs/load-results-local.json`). Google's real latency varies (often 0.5–2 s); re-run with `--target` against the live API to measure it.
+`npm run test:load` exercises the real API and spreadsheet contract against the controlled local latency model. The latest artifact is [`load-results-local.json`](load-results-local.json). It is a design-limit test, not proof of live Google quota or internet performance.
 
-| Scenario | Concurrency | Throughput | p50 | p97.5 | Errors |
-|---|---|---|---|---|---|
-| Authenticated portal read | 10 | 10.8 req/s | 890 ms | 1.1 s | 0 |
-| Authenticated portal read | 30 | 31.8 req/s | 907 ms | 1.1 s | 0 |
-| Authenticated portal read | 60 | 37.4 req/s | 985 ms | 4.4 s | 17 % 503 |
-| Complaint submission (write) | 5 | 1.1 req/s | 4.1 s | 5.5 s | 0 |
-| Complaint submission (write) | 20 | 0.4 req/s | 7.0 s | 9.6 s | client timeouts at 10 s |
+| Scenario | Concurrency | Throughput | p50 | p97.5 | Result |
+|---|---:|---:|---:|---:|---|
+| Authenticated portal read | 10 | 10.7 req/s | 896 ms | 1.11 s | 161/161 successful |
+| Authenticated portal read | 30 | 32.0 req/s | 891 ms | 1.12 s | 480/480 successful |
+| Authenticated portal read | 60 | 37.4 req/s | 975 ms | 4.37 s | 466 successful, 95 rate/busy responses |
+| Complaint write burst | 5 | 1.1 req/s | 4.26 s | 4.87 s | 16/16 successful |
+| Complaint write burst | 20 | 0.4 req/s | 6.92 s | 9.48 s | 6 successful, 30 client timeouts/errors |
 
-**Safe operating envelope (modelled): ≈30 portal reads/s and ≈1 write/s sustained.**
-10,000 daily visitors is a few hundred complaints and a few thousand portal views a day — peak hour well under 5 reads/s and 0.2 writes/s — so it fits with large headroom. Static pages are served from GitHub's CDN and do not touch Apps Script at all.
+The modelled safe envelope is about **30 authenticated reads/s and 1 serialized write/s sustained**. The heavy 20-writer burst is intentionally outside that envelope and fails the release target. Before launch, repeat the test against a staging Cloud Run service and a staging Sheet, record Google quota settings, and set alert thresholds from the observed p95 and error rate. Do not advertise unlimited concurrency.
 
-**Not supported:** thousands of *simultaneous* authenticated requests. Beyond ~30 concurrent reads users get "service busy, retry"; a burst of more than ~10 simultaneous submissions queues for several seconds.
-
-**Release blockers for heavy peaks** (e.g. a campus-wide event): none for normal use. If measured live traffic approaches the envelope, the approved migration path is to keep the Worker and frontend unchanged and swap the `Store` implementation for one that calls the Google Sheets API directly with a service account (parallel reads, batched writes) plus a short-lived Worker KV cache for non-personal reads. Moving off Google Sheets to a database would require your explicit approval.
+Static frontend assets are served by GitHub Pages and do not consume Sheets quota. Cloud Run is deliberately limited to one instance so in-process cache and serialized writes remain coherent. A database migration or multi-instance write coordinator requires a separately approved architecture change.
 
 ## Monitoring
-- `GET /api/health` (configured + Sheet reachable). Use any uptime monitor.
-- Cloudflare dashboard → Workers → `findback-api` → Logs/Analytics for status codes and latency.
-- Apps Script → Executions for data-layer errors and quota messages.
 
-## Cloud Run capacity (measured 2026-11-20, `npm run bench:sheets`)
-
-Real API code + SheetsStore against a fake Google API with modelled latency (Sheets write 500 ms, read 300 ms), one instance:
-
-| Operation | Throughput | Notes |
-|---|---|---|
-| Public/portal reads | > 10,000 req/s | served from the in-memory copy of the sheet; Sheets is re-read every 60 s |
-| PIN verification | thousands/s | limited on purpose: 10 attempts per complaint per 10 min, lockout after 5 failures |
-| Complaint submission | ≈ 2/s burst, ≈ 1/s sustained | one Sheets API write per submission; Google's default quota is 60 write requests/min per service account (raise in the Cloud console if needed) |
-
-That is roughly 3,600 new complaints per hour, which fits 10,000+ potential users. It is not 10,000 simultaneous writers.
-`max-instances=1` keeps writes ordered and the cache consistent. If more write throughput is ever needed, ask for a Sheets
-quota increase first, then consider a database (only with your approval).
+- Probe `GET /api/health`; require both the API and `storeReachable` to be healthy.
+- Monitor Cloud Run request count, p95 latency, 4xx/5xx rate, instance count and container restarts.
+- Alert on Sheets API quota failures, Cloud Storage failures, repeated authentication failures and handover authorization denials.
+- Review the append-only `Activity_Log` for sensitive staff actions and Management exports.
+- Perform a documented restore drill before launch and periodically afterward.

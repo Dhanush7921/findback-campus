@@ -63,11 +63,13 @@ export async function verifyGoogleIdToken(
   return { email: String(payload.email).toLowerCase(), email_verified: true, hd: payload.hd as string | undefined, name: payload.name as string | undefined };
 }
 
-export function parseStaffList(raw: string | undefined): Map<string, 'admin' | 'staff'> {
-  const m = new Map<string, 'admin' | 'staff'>();
+export type StaffRole = 'admin' | 'staff' | 'management';
+
+export function parseStaffList(raw: string | undefined): Map<string, StaffRole> {
+  const m = new Map<string, StaffRole>();
   for (const part of (raw ?? '').split(',')) {
     const [email, role] = part.trim().toLowerCase().split(':');
-    if (email && email.includes('@')) m.set(email, role === 'admin' ? 'admin' : 'staff');
+    if (email && email.includes('@')) m.set(email, role === 'admin' ? 'admin' : role === 'management' ? 'management' : 'staff');
   }
   return m;
 }

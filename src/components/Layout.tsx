@@ -34,7 +34,7 @@ export default function Layout() {
   useEffect(() => { setOpen(false); window.scrollTo({ top: 0 }); }, [loc.pathname]);
   const links = [
     ['/how-it-works', t('nav.how')],
-    ['/track', t('nav.track')],
+    ['/dashboard', 'My complaints'],
     ['/help', t('nav.help')],
   ] as const;
   return (
@@ -46,7 +46,7 @@ export default function Layout() {
           <nav className="hidden items-center gap-1 md:flex" aria-label="Main">
             {links.map(([to, label]) => <NavLink key={to} to={to} className="nav-link">{label}</NavLink>)}
             <LangToggle />
-            <ButtonLink to="/report" size="sm" className="ml-2">{t('nav.report')}</ButtonLink>
+            <ButtonLink to="/access/student" size="sm" className="ml-2">Student sign in</ButtonLink>
           </nav>
           <button className="grid h-11 w-11 place-items-center rounded-xl text-ink-700 hover:bg-silver-50 md:hidden" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-controls="mobile-nav" aria-label={t('nav.menu')}>
             {open ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
@@ -59,7 +59,7 @@ export default function Layout() {
               {links.map(([to, label]) => <NavLink key={to} to={to} className="nav-link py-3 text-base">{label}</NavLink>)}
               <NavLink to="/privacy" className="nav-link py-3 text-base">{t('nav.privacy')}</NavLink>
               <LangToggle />
-              <ButtonLink to="/report" className="mt-2">{t('nav.report')}</ButtonLink>
+              <ButtonLink to="/access/student" className="mt-2">Student sign in</ButtonLink>
             </div>
           </nav>
         )}
@@ -87,14 +87,15 @@ export function Footer() {
           <p className="mt-3 max-w-xs text-sm text-ink-500">{t('footer.tagline')}</p>
         </div>
         <div className="flex flex-col gap-2 text-sm">
-          <Link className="text-ink-500 hover:text-teal-700" to="/report">{t('nav.report')}</Link>
-          <Link className="text-ink-500 hover:text-teal-700" to="/track">{t('nav.track')}</Link>
+          <Link className="text-ink-500 hover:text-teal-700" to="/access/student">Student access</Link>
+          <Link className="text-ink-500 hover:text-teal-700" to="/access/guest">Guest access</Link>
           <Link className="text-ink-500 hover:text-teal-700" to="/how-it-works">{t('nav.how')}</Link>
         </div>
         <div className="flex flex-col gap-2 text-sm">
           <Link className="text-ink-500 hover:text-teal-700" to="/help">{t('nav.help')}</Link>
           <Link className="text-ink-500 hover:text-teal-700" to="/privacy">{t('nav.privacy')}</Link>
           <Link className="text-ink-500 hover:text-teal-700" to="/staff">{t('nav.staff')}</Link>
+          <Link className="text-ink-500 hover:text-teal-700" to="/management">Management</Link>
         </div>
       </div>
       <p className="pb-6 text-center text-xs text-ink-400">© {new Date().getFullYear()} FindBack</p>

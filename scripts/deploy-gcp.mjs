@@ -8,7 +8,6 @@ import { randomBytes } from 'node:crypto';
 import readline from 'node:readline/promises';
 
 const REPO = 'Dhanush7921/findback-campus';
-const SHEET_ID = '1hxlYTgj99bMlkx4xWVWVmkUvqfQxWGsu704t-DHygvU';
 const REGION = 'asia-south1';
 const SERVICE = 'findback-api';
 const ORIGINS = ['https://dhanush7921.github.io', 'https://localhost', 'capacitor://localhost', ...(process.env.EXTRA_ORIGINS ? [process.env.EXTRA_ORIGINS] : [])].join(',');
@@ -22,6 +21,11 @@ const out = (args) => { const r = gc(args); return r.status === 0 ? r.stdout.tri
 const must = (args, what) => { const r = gc(args, { stdio: 'inherit' }); if (r.status !== 0) fail(`${what} failed (see above).`); };
 const step = (s) => console.log(`\n=== ${s}`);
 function fail(s) { console.error(`\n✖ ${s}`); process.exit(1); }
+
+// The production spreadsheet identifier is private deployment configuration,
+// not source code. It can be supplied non-interactively or entered at runtime.
+const SHEET_ID = (process.env.SHEET_ID || await ask('Private Google Sheet ID: ')).trim();
+if (!SHEET_ID) fail('SHEET_ID is required. No cloud resources were changed.');
 
 step('1/9 Google Cloud CLI');
 if (gc(['--version']).status !== 0) fail('gcloud is not installed. Install it from https://cloud.google.com/sdk/docs/install, open a new terminal, and re-run.');
@@ -57,7 +61,8 @@ console.log('Billing enabled.');
 
 step('4/9 Enable APIs');
 must(['services', 'enable', 'run.googleapis.com', 'cloudbuild.googleapis.com', 'artifactregistry.googleapis.com',
-  'secretmanager.googleapis.com', 'sheets.googleapis.com', 'storage.googleapis.com', 'iam.googleapis.com'], 'Enabling APIs');
+  'secretmanager.googleapis.com', 'sheets.googleapis.com', 'storage.googleapis.com', 'iam.googleapis.com',
+  'identitytoolkit.googleapis.com'], 'Enabling APIs');
 
 step('5/9 Service account (least privilege, no key files)');
 const sa = `${SERVICE}@${project}.iam.gserviceaccount.com`;
@@ -85,10 +90,14 @@ for (const name of ['PIN_PEPPER', 'SESSION_KEY']) {
 step('7/9 Share the spreadsheet with the service account');
 console.log(`Open https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit → Share → add\n  ${sa}\nas Editor (untick "Notify people"), then press Enter here.`);
 await ask('Press Enter once shared… ');
+const migration = sh(process.execPath, ['scripts/migrate-sheet-v2.mjs'], { stdio: 'inherit', env: { ...process.env, SHEET_ID } });
+if (migration.status !== 0) fail('The spreadsheet schema migration failed. No Cloud Run deployment was attempted.');
 
 step('8/9 Deploy to Cloud Run (builds the Dockerfile with Cloud Build; takes a few minutes)');
 const envVars = [`SHEET_ID=${SHEET_ID}`, `BUCKET=${bucket}`, `ALLOWED_ORIGINS=${ORIGINS}`,
-  `STAFF_EMAILS=${process.env.STAFF_EMAILS || ''}`, `STAFF_DOMAIN=${process.env.STAFF_DOMAIN || ''}`, `GOOGLE_CLIENT_ID=${process.env.GOOGLE_CLIENT_ID || ''}`];
+  `STAFF_EMAILS=${process.env.STAFF_EMAILS || ''}`, `STAFF_DOMAIN=${process.env.STAFF_DOMAIN || ''}`, `GOOGLE_CLIENT_ID=${process.env.GOOGLE_CLIENT_ID || ''}`,
+  `FIREBASE_PROJECT_ID=${process.env.FIREBASE_PROJECT_ID || project}`, `FIREBASE_API_KEY=${process.env.FIREBASE_API_KEY || ''}`,
+  `FIREBASE_AUTH_DOMAIN=${process.env.FIREBASE_AUTH_DOMAIN || ''}`, `FIREBASE_APP_ID=${process.env.FIREBASE_APP_ID || ''}`];
 must(['run', 'deploy', SERVICE, '--source', '.', `--region=${REGION}`, `--service-account=${sa}`, '--allow-unauthenticated',
   // One instance keeps the in-memory sheet cache and write ordering consistent; see docs/OPERATIONS.md for capacity.
   '--max-instances=1', '--min-instances=0', '--concurrency=80', '--cpu=1', '--memory=512Mi', '--timeout=60',

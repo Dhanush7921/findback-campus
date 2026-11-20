@@ -24,9 +24,9 @@ export function gasStore(): { store: Store; runtime: ReturnType<typeof createGas
   return { store: new AppsScriptStore('https://script.google.com/macros/s/EMU/exec', runtime.secret, { fetchImpl, retries: 0 }), runtime };
 }
 
-export function makeClient(opts: { env?: Partial<Env>; store?: Store | null; ip?: string } = {}) {
+export function makeClient(opts: { env?: Partial<Env>; store?: Store | null; ip?: string; now?: () => number } = {}) {
   const store = opts.store === undefined ? new MemoryStore() : opts.store;
-  const handle = createApp({ env: { ...baseEnv, ...opts.env }, store });
+  const handle = createApp({ env: { ...baseEnv, ...opts.env }, store, now: opts.now });
   let n = 0;
   async function call(method: string, path: string, body?: unknown, token?: string, extra: Record<string, string> = {}) {
     const headers: Record<string, string> = { origin: ORIGIN, 'cf-connecting-ip': opts.ip ?? `10.0.0.${(n++ % 200) + 1}`, ...extra };

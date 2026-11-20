@@ -131,7 +131,7 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
   );
 }
 
-export function PageHeader({ eyebrow, title, lead, actions }: { eyebrow?: ReactNode; title: ReactNode; lead?: ReactNode; actions?: ReactNode }) {
+export function PageHeader({ eyebrow, title, lead, actions, action }: { eyebrow?: ReactNode; title: ReactNode; lead?: ReactNode; actions?: ReactNode; action?: ReactNode }) {
   return (
     <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between animate-rise">
       <div>
@@ -139,7 +139,7 @@ export function PageHeader({ eyebrow, title, lead, actions }: { eyebrow?: ReactN
         <h1 className="text-[1.75rem] font-extrabold leading-tight sm:text-4xl">{title}</h1>
         {lead && <p className="mt-2 max-w-2xl text-[15px] leading-relaxed text-ink-500">{lead}</p>}
       </div>
-      {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+      {(actions || action) && <div className="flex flex-wrap gap-2">{actions || action}</div>}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { accessInput } from '../../../shared/domain';
 import { ShieldArt } from '../../components/art';
-import { Button, Card, Field, Input, Notice } from '../../components/ui';
+import { Button, ButtonLink, Card, Field, Input, Notice } from '../../components/ui';
 import { ApiError, apiPost } from '../../lib/api';
 import { useConfig } from '../../lib/config';
 import { useI18n } from '../../lib/i18n';
@@ -68,8 +68,9 @@ export default function Track() {
       </div>
       <Card className="p-6 sm:p-9 animate-rise">
         <div className="mb-6 grid h-12 w-12 place-items-center rounded-2xl brand-gradient text-white"><LockKeyhole className="h-6 w-6" /></div>
-        <h1 className="text-2xl font-extrabold sm:text-3xl">{t('access.title')}</h1>
-        <p className="mt-2 text-sm text-ink-500">{t('access.lead')}</p>
+        <h1 className="text-2xl font-extrabold sm:text-3xl">Legacy complaint access</h1>
+        <p className="mt-2 text-sm text-ink-500">This form is only for complaints created before the verified-phone V2 migration.</p>
+        <div className="mt-4 grid grid-cols-2 gap-2"><ButtonLink to="/access/student" variant="secondary">Student access</ButtonLink><ButtonLink to="/access/guest" variant="secondary">Guest access</ButtonLink></div>
         {status === 'unconfigured' && <Notice tone="warn" className="mt-4">{t('common.notConnected')}</Notice>}
         {status === 'offline' && <Notice tone="warn" className="mt-4">{t('common.unavailable')}</Notice>}
         <form onSubmit={submit} noValidate className="mt-6 space-y-5">

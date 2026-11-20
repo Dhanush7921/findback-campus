@@ -9,7 +9,8 @@ export default function Handovers() {
   const toast = useToast();
   const { data, error, reload } = useStaffGet<{ ready: R[]; recent: R[] }>('/api/staff/handovers');
   const [active, setActive] = useState<R | null>(null);
-  const [name, setName] = useState('');
+  const [issued, setIssued] = useState<{ handoverId: string; code: string; expiresAt: string } | null>(null);
+  const [release, setRelease] = useState<R | null>(null);
   const [checked, setChecked] = useState(false);
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
@@ -19,15 +20,25 @@ export default function Handovers() {
     if (!active) return;
     setBusy(true);
     try {
-      await apiPost('/api/staff/handovers', { claimId: active.claim_id, receiverName: name, receiverIdChecked: checked, notes }, { auth: 'staff' });
-      toast('Handover recorded — complaint marked Returned');
-      setActive(null); setName(''); setChecked(false); setNotes('');
+      const r = await apiPost<{ handoverId: string; code: string; expiresAt: string }>('/api/staff/handovers', { claimId: active.claim_id }, { auth: 'staff' });
+      setIssued(r);
+      toast('Single-use receiver code created');
+      await reload();
+    } catch (e) { toast((e as ApiError).message, 'error'); } finally { setBusy(false); }
+  };
+  const complete = async () => {
+    if (!release) return;
+    setBusy(true);
+    try {
+      await apiPost(`/api/staff/handovers/${release.handover_id}/complete`, { receiverIdChecked: checked, notes }, { auth: 'staff' });
+      toast('Receiver and staff confirmations recorded — item marked Returned');
+      setRelease(null); setChecked(false); setNotes('');
       await reload();
     } catch (e) { toast((e as ApiError).message, 'error'); } finally { setBusy(false); }
   };
   return (
     <>
-      <PageHeader title="Item handover" lead="Release items only for approved claims, after checking the receiver’s college ID in person." />
+      <PageHeader title="Receiver-confirmed handover" lead="Issue a short-lived code, wait for the verified receiver’s digital acknowledgment, then physically check and release the item." />
       <Card className="mb-6 overflow-hidden">
         <h2 className="p-5 pb-0 font-bold">Ready for collection</h2>
         {!data.ready.length ? <EmptyState title="Nothing waiting for collection" /> : (
@@ -38,7 +49,7 @@ export default function Handovers() {
                 <td className="px-4 py-3"><Link className="font-mono text-teal-700 hover:underline" to={`/staff/complaints/${c.complaint_id}`}>{c.complaint_id}</Link></td>
                 <td className="px-4 py-3"><Link className="font-mono text-teal-700 hover:underline" to={`/staff/inventory/${c.item_id}`}>{c.item_id}</Link></td>
                 <td className="px-4 py-3 text-xs">{c.reviewed_by}<br />{fmtDate(c.reviewed_at)}</td>
-                <td className="px-4 py-3 text-right"><Button size="sm" onClick={() => setActive(c)}>Record handover</Button></td>
+                <td className="px-4 py-3 text-right"><Button size="sm" onClick={() => { setActive(c); setIssued(null); }}>Start handover</Button></td>
               </tr>
             ))}
           </Table>
@@ -46,26 +57,26 @@ export default function Handovers() {
       </Card>
       <Card className="overflow-hidden">
         <h2 className="p-5 pb-0 font-bold">Recent handovers</h2>
-        <Table head={['Handover', 'Complaint', 'Receiver', 'Approved / handed over', 'When']} empty={!data.recent.length}>
+        <Table head={['Handover', 'Complaint', 'Receiver', 'State', 'Approved / released', '']} empty={!data.recent.length}>
           {data.recent.map((h) => (
             <tr key={h.handover_id}>
               <td className="px-4 py-3 font-mono">{h.handover_id}</td>
               <td className="px-4 py-3 font-mono">{h.complaint_id}</td>
-              <td className="px-4 py-3">{h.receiver_name} {h.receiver_id_checked === 'true' && <span className="chip bg-emerald-100 text-emerald-800">ID checked</span>}</td>
+              <td className="px-4 py-3">{h.receiver_name || 'Awaiting receiver'} {h.receiver_id_checked === 'true' && <span className="chip bg-emerald-100 text-emerald-800">ID checked</span>}</td>
+              <td className="px-4 py-3"><span className="chip bg-silver-50 text-ink-700">{h.state || 'Legacy returned'}</span></td>
               <td className="px-4 py-3 text-xs">{h.approved_by}<br />{h.handed_over_by}</td>
-              <td className="px-4 py-3 text-xs">{fmtDate(h.created_at)}</td>
+              <td className="px-4 py-3 text-right">{h.state === 'receiver_confirmed' && <Button size="sm" onClick={() => { setRelease(h); setChecked(false); setNotes(''); }}>Verify & release</Button>}</td>
             </tr>
           ))}
         </Table>
       </Card>
-      <Modal open={!!active} onClose={() => setActive(null)} title="Record handover">
+      <Modal open={!!active} onClose={() => { setActive(null); setIssued(null); }} title="Start secure handover">
         <div className="space-y-4">
-          <Notice tone="warn">Check the college ID card matches the complaint’s student. Never ask for the PIN.</Notice>
-          <Field label="Receiver full name" required>{(fid) => <Input id={fid} value={name} onChange={(e) => setName(e.target.value)} />}</Field>
-          <label className="flex items-start gap-3 text-sm"><input type="checkbox" className="mt-0.5 h-5 w-5 accent-teal-600" checked={checked} onChange={(e) => setChecked(e.target.checked)} /> I checked the receiver’s college ID card in person and it matches the complaint.</label>
-          <Field label="Notes" optionalLabel="optional">{(fid) => <Input id={fid} value={notes} onChange={(e) => setNotes(e.target.value)} />}</Field>
-          <Button className="w-full" disabled={!checked || name.trim().length < 2} loading={busy} onClick={submit}>Confirm handover</Button>
+          {!issued ? <><Notice tone="info">Generate a one-time code and show it to the person physically collecting the item. They must sign in with phone OTP and confirm the digital receipt.</Notice><Button className="w-full" loading={busy} onClick={submit}>Generate receiver code</Button></> : <><Notice tone="warn">Show this code only to the receiver at the counter. It expires at {fmtDate(issued.expiresAt)} and cannot be replayed.</Notice><div className="rounded-2xl bg-ink-900 p-6 text-center font-mono text-4xl font-extrabold tracking-[.3em] text-white">{issued.code}</div><p className="text-center font-mono text-xs text-ink-500">{issued.handoverId}</p><Button variant="secondary" className="w-full" onClick={() => { setActive(null); setIssued(null); }}>Done — wait for receiver confirmation</Button></>}
         </div>
+      </Modal>
+      <Modal open={!!release} onClose={() => setRelease(null)} title="Final staff release">
+        <div className="space-y-4"><Notice tone="success">The receiver has confirmed the digital receipt. Complete the physical identity check before releasing the item.</Notice><label className="flex items-start gap-3 text-sm"><input type="checkbox" className="mt-0.5 h-5 w-5 accent-teal-600" checked={checked} onChange={(e) => setChecked(e.target.checked)} /> I physically checked the actual receiver and confirm the item is being released now.</label><Field label="Release notes" optionalLabel="optional">{(fid) => <Input id={fid} value={notes} onChange={(e) => setNotes(e.target.value)} />}</Field><Button className="w-full" disabled={!checked} loading={busy} onClick={complete}>Confirm physical release</Button></div>
       </Modal>
     </>
   );

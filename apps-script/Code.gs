@@ -16,7 +16,9 @@ var FB_SCHEMA = {
     'name', 'student_id', 'department', 'phone', 'email',
     'category', 'item_name', 'description', 'color_features', 'last_seen_location',
     'lost_date', 'lost_time', 'photo_file_id', 'ownership_evidence', 'extra_info',
-    'linked_item_id', 'collection_instructions', 'staff_notes', 'retention_until', 'version'],
+    'linked_item_id', 'collection_instructions', 'staff_notes', 'retention_until', 'version',
+    'reporter_uid', 'reporter_kind', 'reporter_phone', 'reporter_verified_at',
+    'identity_ref', 'identity_status', 'submission_source', 'guest_ref', 'deleted_at', 'deleted_by'],
   Access_Credentials: ['complaint_id', 'pin_hash', 'created_at', 'failed_attempts', 'locked_until',
     'last_success_at', 'rotated_at', 'version'],
   Found_Items: ['item_id', 'created_at', 'updated_at', 'status', 'category', 'item_name',
@@ -27,8 +29,12 @@ var FB_SCHEMA = {
   Complaint_Updates: ['update_id', 'created_at', 'complaint_id', 'type', 'message', 'item_id',
     'data_json', 'visible_to_student', 'actor'],
   Handover_Records: ['handover_id', 'created_at', 'complaint_id', 'item_id', 'claim_id',
-    'receiver_name', 'receiver_id_checked', 'approved_by', 'handed_over_by', 'notes'],
-  Activity_Log: ['log_id', 'created_at', 'actor', 'action', 'entity', 'entity_id', 'details'],
+    'receiver_name', 'receiver_id_checked', 'approved_by', 'handed_over_by', 'notes',
+    'state', 'challenge_hash', 'challenge_expires_at', 'challenge_used_at',
+    'receiver_uid', 'receiver_kind', 'receiver_confirmed_at', 'receiver_acknowledgment',
+    'receiver_evidence_file_id', 'owner_authorization', 'staff_confirmed_at', 'version'],
+  Activity_Log: ['log_id', 'created_at', 'actor', 'action', 'entity', 'entity_id', 'details',
+    'actor_role', 'before_status', 'after_status', 'authorization_result', 'evidence_ref', 'request_id'],
   Application_Settings: ['key', 'value', 'updated_at', 'updated_by']
 };
 var FB_KEYS = {
@@ -380,8 +386,8 @@ function fbBackup_() {
 function dailyBackup() { fbBackup_(); }
 
 /**
- * Redacts personal data of complaints past retention_until that are Returned
- * or Closed, and trashes their photos. Keeps anonymous records for analytics.
+ * Redacts personal data of terminal complaints past retention_until and
+ * trashes their photos. Keeps anonymous records for analytics.
  */
 function retentionSweep() {
   var lock = LockService.getScriptLock();
@@ -397,7 +403,7 @@ function retentionSweep() {
     var redact = ['name', 'student_id', 'phone', 'email', 'ownership_evidence', 'extra_info', 'photo_file_id'];
     for (var i = 0; i < data.length; i++) {
       var r = fbRowObj_(cols, data[i]);
-      if ((r.status === 'Returned' || r.status === 'Closed') && r.retention_until && r.retention_until < now && r.name !== '[redacted]') {
+      if (['Returned', 'Closed', 'Rejected', 'Cancelled'].indexOf(r.status) !== -1 && r.retention_until && r.retention_until < now && r.name !== '[redacted]') {
         if (r.photo_file_id) fbDeleteFile_({ fileId: r.photo_file_id });
         redact.forEach(function (c) { r[c] = c === 'photo_file_id' ? '' : '[redacted]'; });
         sh.getRange(i + 2, 1, 1, cols.length).setValues([cols.map(function (c) { return fbCell_(r[c]); })]);

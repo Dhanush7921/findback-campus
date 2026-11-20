@@ -1,30 +1,34 @@
 # Security model
 
 ## Trust boundaries
-- **Browser / app**: untrusted. Hiding a button is never a control; every rule is enforced in the Worker.
-- **Worker**: holds `PIN_PEPPER`, `SESSION_KEY`, `GAS_SHARED_SECRET`. Stateless; enforces authentication, authorization, validation and workflow rules on every request.
-- **Apps Script**: accepts only HMAC-SHA256-signed envelopes (timestamp ±5 min, single-use nonce cached 10 min). Executes as the sheet owner; never exposes Sheets/Drive publicly.
 
-## Controls
+- **Browser / Android app:** untrusted. The API never treats hidden buttons or form identity fields as authorization.
+- **Cloud Run API:** validates Firebase and Google tokens, creates short-lived signed application sessions, enforces roles, workflow transitions, rate limits, origin restrictions and audit events.
+- **Google Sheets / Cloud Storage:** private. The Cloud Run service identity receives only the required Sheets and object permissions; no service-account key file is created.
+- **Management:** authenticated but read-only. Management sessions are denied by all operational staff handlers even if they call the API directly.
+
+## Principal controls
+
 | Threat | Control |
 |---|---|
-| Guessing complaint access | 40-bit random IDs + 50-bit random PINs (crypto RNG, unambiguous alphabet); 5 failures → lock 15 min, doubling up to 24 h (stored in `Access_Credentials`, so it survives Worker restarts); per-IP and per-ID rate limits; identical error for unknown ID and wrong PIN |
-| PIN disclosure | Only `HMAC-SHA256(pepper, "pin:v1:" + id + ":" + pin)` is stored; pepper never in the sheet; PIN shown once, never in URLs, logs, storage or analytics; print/copy only on the success screen, which wipes router state |
-| Session theft / replay | HMAC-signed tokens, 15-min student / 2-h staff expiry, `sessionStorage` only, bound to credential version (staff PIN reset revokes sessions), native app clears sessions after 5 min in background |
-| Cross-complaint access | Student endpoints take no complaint ID — the ID comes only from the verified token. Tests assert isolation |
-| Staff impersonation | Google ID token verified server-side (RS256 via Google JWKS, `aud`, `iss`, `exp`, `email_verified`, optional `hd`), then allowlist + role checked on **every** request (removing an email revokes immediately). Admin-only: settings, backups |
-| Unprotected admin | Staff API returns `503 staff_disabled` until OAuth + allowlist are configured; dev login exists only when `APP_ENV=development` and the store is local |
-| False claims | Students never see found-item photos or private details; approval requires three explicit staff checks; handover requires an approved claim, an in-person ID check and (optionally) a second staff member; everything is logged |
-| Spam / bots | Honeypot, minimum fill time, idempotency keys, rate limits, optional Turnstile, office "pause submissions" switch |
-| Injection | zod validation on both sides, control-char stripping, React output escaping, spreadsheet formula-injection escaping (`'` prefix), strict CSP meta, JSON-only API |
-| Malicious uploads | JPEG/PNG/WebP only, magic-byte check, 3 MB cap, client re-encode strips EXIF/GPS, files stored in a private folder and served only through authorised endpoints with `no-store` |
-| Data leakage via caches | API responses `Cache-Control: no-store`; service worker precaches static assets only and never caches `/api/*`; complaint data held in memory only |
-| Transport | HTTPS everywhere (Pages, workers.dev, Apps Script); HSTS, nosniff, frame-deny, referrer `no-referrer`; CORS allow-list and requests from other origins refused with 403 |
-| Logs | Structured access logs contain method, redacted path, status and timing only — tests assert PINs, IDs and names never appear |
+| Fake student identity | Firebase phone token is verified server-side; Student access additionally requires verified phone + student ID + department to match the protected college registry. Users cannot self-assign Student, Admin or Management roles. |
+| Guest misrepresentation | The UI and records say **Phone Verified Guest**. Phone control is never described as real-world identity or college-membership proof. |
+| Cross-account access | Every V2 complaint read first compares the stored reporter UID with the signed session UID. Isolation is tested with direct backend requests. |
+| Staff or management impersonation | Google ID token signature, issuer, audience, expiry, verified email and optional Workspace domain are checked, followed by a server-side email/role allowlist on every request. |
+| Management edits | Management uses a separate GET-only API namespace. Operational staff endpoints return `403 read_only` for Management sessions; no Management mutation route exists. |
+| False or duplicate handover | Claim approval, receiver acknowledgment and staff physical release are separate states. The six-digit challenge is short-lived, single-use and stored only as a keyed hash. `Returned` is impossible until receiver and staff confirmations both exist. |
+| Proxy collection | The actual OTP-linked receiver identity is recorded separately from the owner. Non-owner collection requires recorded owner authorization. |
+| Audit tampering | Application operations append audit rows with actor, role, timestamp, record, action, authorization result and before/after state. Normal interfaces contain no update/delete endpoint for audit rows. Sheet editor access must remain tightly restricted. |
+| Spam / OTP abuse | Firebase quotas/abuse controls, API rate limits, complaint idempotency keys, minimum form time and repeat-submission detection. Optional Turnstile can supplement public forms. |
+| Upload attacks | JPEG/PNG/WebP allowlist, magic-byte check, 3 MB cap, client re-encode, private object storage and authenticated streaming with `no-store`. |
+| Spreadsheet injection | Control-character removal, Zod validation and formula-prefix escaping before every Sheet write. |
+| Session theft | Short-lived HMAC-signed sessions are stored in `sessionStorage`, never URLs or localStorage. A strict CSP limits third-party script and connection origins. |
+| Data leakage | API responses use `Cache-Control: no-store`; the service worker caches static assets only. Sensitive found-item details and media are never returned to public clients. |
 
-## Known limitations / residual risk
-- Per-IP limits must stay generous because campus NAT puts many students behind one IP; enable Turnstile if abuse appears.
-- The Rate Limiting binding is per-location and eventually consistent; durable brute-force protection is the per-complaint lockout.
-- `sessionStorage` tokens are readable by injected script; the strict CSP and absence of third-party scripts (except Google sign-in / Turnstile when enabled) mitigate this.
-- The Apps Script web app must be "Anyone" to be callable from Cloudflare; protection relies on the shared secret — rotate it if it may have leaked.
-- Sheet owners and editors can read all data in the sheet. Limit editors to the lost & found administrators.
+## Residual risks and operational requirements
+
+- Phone OTP security depends on the Firebase project, authorised origins, Android SHA configuration, quotas and billing state.
+- A Sheet owner/editor can read all rows. Restrict editor access and monitor sharing changes.
+- Google Sheets is the capacity bottleneck. Cloud Run serialises writes in one instance; do not advertise unlimited concurrency.
+- The legacy Complaint ID + PIN routes exist only for existing V1 records during migration. New records use verified-phone identity.
+- Staff-assisted phone-loss recovery must be documented and performed only after proportional in-person identity and ownership checks, with an audit event.

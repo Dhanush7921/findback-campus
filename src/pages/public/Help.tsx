@@ -4,11 +4,11 @@ import { useConfig } from '../../lib/config';
 import { useI18n } from '../../lib/i18n';
 
 const FAQ: [string, string][] = [
-  ['Do I need an account?', 'No. Submit a complaint and you receive a Complaint ID and secret PIN. Those two together open your private complaint portal.'],
-  ['I lost my PIN. What now?', 'PINs are stored only as secure one-way hashes, so nobody can look yours up. Visit the lost & found office with your college ID card. After verifying you, staff issue a new PIN and your old PIN stops working.'],
-  ['Can other people see my complaint?', 'No. There is no public list of complaints. Only you (with ID + PIN) and authorised office staff can see it.'],
+  ['How do I sign in?', 'Students and guests verify a mobile number with a one-time password. Student access also requires an exact match with the approved college registry. OTP confirms control of a phone; it is not proof of real-world identity.'],
+  ['What if I used the old PIN system?', 'Complaints created before the V2 migration can still use the Legacy complaint access page. New complaints are linked to a verified-phone dashboard and do not receive a PIN.'],
+  ['Can other people see my complaint?', 'No. There is no public complaint list. Your dashboard shows only complaints linked to your signed identity; authorised office staff can access records for operational work.'],
   ['Why can’t I see photos of found items?', 'To prevent false claims, found items are described in general terms. Staff compare your private ownership evidence against details only they can see.'],
-  ['How do I collect my item?', 'Once staff verify your claim, your status changes to “Ready for collection” with instructions. Bring your college ID card. Staff check your identity and record the handover.'],
+  ['How do I collect my item?', 'After ownership approval, staff issue a short-lived, single-use receiver code. Confirm it from a verified-phone session; staff then physically check your ID and complete the release. A proxy also needs recorded owner authorisation.'],
   ['What should I write as ownership evidence?', 'Something only the owner would know: the lock-screen wallpaper, stickers, contents of a bag, a serial number, a scratch or engraving. Avoid sharing passwords.'],
   ['I found something. How do I report it?', 'Please hand it in at the lost & found office. Staff register it in FindBack so it can be matched with a complaint.'],
   ['How long is my data kept?', 'Personal details are automatically redacted a fixed period after a complaint is returned or closed. See the privacy policy.'],

@@ -1,6 +1,6 @@
 import { Activity, BarChart3, ClipboardCheck, Handshake, Inbox, LayoutDashboard, LogOut, Menu, PackagePlus, Archive, Search, Settings, ShieldAlert, Sparkles, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation } from 'react-router';
+import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router';
 import { Logo } from '../../components/art';
 import { useToast } from '../../components/toast';
 import { Button, ButtonLink, Card, Notice, PageSkeleton } from '../../components/ui';
@@ -27,7 +27,7 @@ const NAV = [
   ['settings', 'Settings', Settings],
 ] as const;
 
-function SignIn({ clientId, devLogin, onDone }: { clientId: string | null; devLogin?: boolean; onDone: () => void }) {
+export function SignIn({ clientId, devLogin, onDone, title = 'Staff sign-in' }: { clientId: string | null; devLogin?: boolean; onDone: () => void; title?: string }) {
   const btn = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -62,7 +62,7 @@ function SignIn({ clientId, devLogin, onDone }: { clientId: string | null; devLo
     <div className="grid min-h-dvh place-items-center safe-x">
       <Card className="w-full max-w-md p-8 text-center animate-rise">
         <div className="mb-6 flex justify-center"><Logo /></div>
-        <h1 className="text-2xl font-extrabold">Staff sign-in</h1>
+        <h1 className="text-2xl font-extrabold">{title}</h1>
         <p className="mt-2 text-sm text-ink-500">Use your authorised institutional Google account. Access is checked on the server for every request.</p>
         <div className="mt-6 flex justify-center" ref={btn} />
         {devLogin && <Button variant="secondary" className="mt-4 w-full" loading={busy} onClick={() => exchange('/api/staff/dev-session', { email: 'dev.admin@example.edu', role: 'admin' })}>Development sign-in (local only)</Button>}
@@ -115,7 +115,8 @@ export default function StaffLayout() {
   if (!verified) return <PageSkeleton />;
 
   const email = session.meta?.email ?? '';
-  const role = (session.meta?.role as 'admin' | 'staff') ?? 'staff';
+  const role = (session.meta?.role as 'admin' | 'staff' | 'management') ?? 'staff';
+  if (role === 'management') return <Navigate to="/management" replace />;
   const signOut = () => { window.google?.accounts.id.disableAutoSelect(); clearSession('staff'); setVerified(false); };
   const sidebar = (
     <nav className="flex flex-col gap-0.5" aria-label="Staff">
