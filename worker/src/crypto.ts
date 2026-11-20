@@ -14,6 +14,11 @@ export function randomCode(len: number): string {
 export const newComplaintId = () => `FB-${randomCode(4)}-${randomCode(4)}`;
 /** PIN: XXXX-XXXX-XX (50 random bits) combined with lockouts and rate limiting. */
 export const newPin = () => `${randomCode(4)}-${randomCode(4)}-${randomCode(2)}`;
+/** Six decimal digits for an in-person, short-lived handover challenge. */
+export function newHandoverCode(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  return [...bytes].map((b) => String(b % 10)).join('');
+}
 export const newId = (prefix: string) => `${prefix}-${randomCode(8)}`;
 
 export function toHex(buf: ArrayBuffer): string {
@@ -58,8 +63,19 @@ function unb64url(s: string): string {
 }
 
 export interface StudentSession { t: 'student'; cid: string; v: string; exp: number }
-export interface StaffSession { t: 'staff'; email: string; role: 'admin' | 'staff'; exp: number }
-export type Session = StudentSession | StaffSession;
+export interface ReporterSession {
+  t: 'reporter';
+  uid: string;
+  role: 'student' | 'guest';
+  phone: string;
+  name: string;
+  studentId: string;
+  department: string;
+  identityRef: string;
+  exp: number;
+}
+export interface StaffSession { t: 'staff'; email: string; role: 'admin' | 'staff' | 'management'; exp: number }
+export type Session = StudentSession | ReporterSession | StaffSession;
 
 export async function signSession(key: string, s: Session): Promise<string> {
   const body = b64url(JSON.stringify(s));

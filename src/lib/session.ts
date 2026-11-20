@@ -3,7 +3,7 @@
  * or app closes) — never localStorage — and never contain the PIN. Complaint
  * data itself is held in memory only.
  */
-export type Kind = 'student' | 'staff';
+export type Kind = 'student' | 'reporter' | 'staff';
 interface Stored { token: string; expiresAt: number; meta?: Record<string, string> }
 const key = (k: Kind) => `fb.session.${k}`;
 

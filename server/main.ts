@@ -31,6 +31,10 @@ const env: Env = {
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || undefined,
   STAFF_EMAILS: process.env.STAFF_EMAILS || undefined,
   STAFF_DOMAIN: process.env.STAFF_DOMAIN || undefined,
+  FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID || undefined,
+  FIREBASE_API_KEY: process.env.FIREBASE_API_KEY || undefined,
+  FIREBASE_AUTH_DOMAIN: process.env.FIREBASE_AUTH_DOMAIN || undefined,
+  FIREBASE_APP_ID: process.env.FIREBASE_APP_ID || undefined,
   TURNSTILE_SECRET: process.env.TURNSTILE_SECRET || undefined,
   TURNSTILE_SITE_KEY: process.env.TURNSTILE_SITE_KEY || undefined,
   APP_ENV: 'production', // demo data and dev staff login can never be enabled on Cloud Run

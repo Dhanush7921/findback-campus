@@ -15,6 +15,9 @@ const Track = lazy(() => import('./pages/public/Track'));
 const Help = lazy(() => import('./pages/public/Help'));
 const Privacy = lazy(() => import('./pages/public/Privacy'));
 const NotFound = lazy(() => import('./pages/public/NotFound'));
+const PhoneAccess = lazy(() => import('./pages/public/PhoneAccess'));
+const ReporterDashboard = lazy(() => import('./pages/reporter/Dashboard'));
+const ReporterComplaint = lazy(() => import('./pages/reporter/Complaint'));
 
 const PortalLayout = lazy(() => import('./pages/portal/PortalLayout'));
 const PortalOverview = lazy(() => import('./pages/portal/Overview'));
@@ -40,6 +43,8 @@ const StaffUnclaimed = lazy(() => import('./pages/staff/Unclaimed'));
 const StaffActivity = lazy(() => import('./pages/staff/Activity'));
 const StaffAnalytics = lazy(() => import('./pages/staff/Analytics'));
 const StaffSettings = lazy(() => import('./pages/staff/Settings'));
+const ManagementLayout = lazy(() => import('./pages/management/ManagementLayout'));
+const ManagementPage = lazy(() => import('./pages/management/ManagementPage'));
 
 // Native apps load from a local origin, where hash routing avoids server rewrites.
 const Router = IS_NATIVE ? HashRouter : BrowserRouter;
@@ -60,6 +65,9 @@ export default function App() {
                   <Route path="track" element={<Track />} />
                   <Route path="help" element={<Help />} />
                   <Route path="privacy" element={<Privacy />} />
+                  <Route path="access/:mode" element={<PhoneAccess />} />
+                  <Route path="dashboard" element={<ReporterDashboard />} />
+                  <Route path="dashboard/complaints/:id" element={<ReporterComplaint />} />
                   <Route path="portal" element={<PortalLayout />}>
                     <Route index element={<PortalOverview />} />
                     <Route path="details" element={<PortalDetails />} />
@@ -86,6 +94,13 @@ export default function App() {
                   <Route path="activity" element={<StaffActivity />} />
                   <Route path="analytics" element={<StaffAnalytics />} />
                   <Route path="settings" element={<StaffSettings />} />
+                </Route>
+                <Route path="management" element={<ManagementLayout />}>
+                  <Route index element={<ManagementPage />} />
+                  <Route path="analytics" element={<ManagementPage />} />
+                  <Route path="hotspots" element={<ManagementPage />} />
+                  <Route path="audit" element={<ManagementPage />} />
+                  <Route path="policies" element={<ManagementPage />} />
                 </Route>
               </Routes>
             </Suspense>

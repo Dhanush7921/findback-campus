@@ -18,7 +18,8 @@ describe.each([
   ['google sheets api (fake)', () => new SheetsStore('s', 'b', async () => 't', { fetchImpl: createFakeGoogle().fetchImpl })],
 ])('End-to-end API workflow (%s)', (_n, mkStore) => {
   it('submit → verify → match → claim → approve → handover → close', async () => {
-    const { call, store } = makeClient({ env: devEnv as never, store: mkStore() });
+    let clock = Date.now();
+    const { call, store } = makeClient({ env: devEnv as never, store: mkStore(), now: () => clock });
     // 1. Submit
     const sub = await call('POST', '/api/complaints', { ...complaintBody(), photo: { mime: 'image/jpeg', dataBase64: TINY_JPEG } });
     expect(sub.status).toBe(201);
@@ -82,13 +83,34 @@ describe.each([
     expect(p3.json.complaint.status).toBe('Ready for Collection');
     expect(p3.json.collection.instructions).toContain('college ID');
 
-    // 6. Handover requires ID check
-    expect((await call('POST', '/api/staff/handovers', { claimId, receiverName: 'Asha Reddy', receiverIdChecked: false }, st)).status).toBe(422);
-    const ho = await call('POST', '/api/staff/handovers', { claimId, receiverName: 'Asha Reddy', receiverIdChecked: true, notes: 'ID card checked' }, st);
+    // 6. Handover is two-party: staff issues a short-lived code, the verified
+    // receiver acknowledges, then staff physically checks and releases.
+    const expiredHandover = await call('POST', '/api/staff/handovers', { claimId }, st);
+    expect(expiredHandover.status).toBe(201);
+    expect(expiredHandover.json.code).toMatch(/^\d{6}$/);
+    const receiver = (await call('POST', '/api/v2/auth/dev-session', { role: 'guest', uid: 'receiver-1', name: 'Asha Reddy' })).json.token;
+    clock += 11 * 60 * 1000;
+    expect((await call('POST', `/api/v2/handovers/${expiredHandover.json.handoverId}/confirm`, {
+      code: expiredHandover.json.code,
+      receiverName: 'Asha Reddy',
+      acknowledgment: 'I confirm that I received this item at the office counter.',
+      ownerAuthorization: 'Owner authorised this proxy collection in writing.',
+    }, receiver)).status).toBe(410);
+    const ho = await call('POST', '/api/staff/handovers', { claimId }, st);
     expect(ho.status).toBe(201);
+    expect(ho.json.handoverId).not.toBe(expiredHandover.json.handoverId);
+    const confirm = await call('POST', `/api/v2/handovers/${ho.json.handoverId}/confirm`, {
+      code: ho.json.code,
+      receiverName: 'Asha Reddy',
+      acknowledgment: 'I confirm that I received this item at the office counter.',
+      ownerAuthorization: 'Owner authorised this proxy collection in writing.',
+    }, receiver);
+    expect(confirm.status).toBe(200);
+    expect((await call('POST', `/api/staff/handovers/${ho.json.handoverId}/complete`, { receiverIdChecked: false }, st)).status).toBe(422);
+    expect((await call('POST', `/api/staff/handovers/${ho.json.handoverId}/complete`, { receiverIdChecked: true, notes: 'ID card checked' }, st)).status).toBe(200);
     const p4 = await call('GET', '/api/portal', undefined, token);
     expect(p4.json.complaint.status).toBe('Returned');
-    expect(p4.json.timeline.map((t: { status: string }) => t.status)).toEqual(['Submitted', 'Potential Match', 'Awaiting Verification', 'Ready for Collection', 'Returned']);
+    expect(p4.json.timeline.map((t: { status: string }) => t.status)).toEqual(['Submitted', 'Potential Match', 'Awaiting Verification', 'Ready for Collection', 'Awaiting Receiver Confirmation', 'Returned']);
     const item = await call('GET', `/api/staff/found-items/${itemId}`, undefined, st);
     expect(item.json.item.status).toBe('Returned');
 
@@ -103,6 +125,38 @@ describe.each([
 });
 
 describe('Submission rules', () => {
+  it('completes the V2 verified-reporter workflow without editable identity or a PIN', async () => {
+    const { call } = makeClient({ env: devEnv as never });
+    const reporter = (await call('POST', '/api/v2/auth/dev-session', { role: 'student', uid: 'v2-owner', name: 'Registry Name' })).json.token;
+    const created = await call('POST', '/api/v2/complaints', complaintBody({ name: 'Forged Name', studentId: 'FORGED', phone: '+919999999999' }), reporter);
+    expect(created.status).toBe(201);
+    expect(created.json.pin).toBeUndefined();
+    const complaintId = created.json.complaintId as string;
+
+    const staff = await staffToken(call);
+    const found = await call('POST', '/api/staff/found-items', {
+      category: 'Bag / Backpack', itemName: 'Black backpack', publicDescription: 'Black backpack found near the library',
+      privateDetails: 'Green notebook with student number', colorFeatures: 'Black with red zipper pulls',
+      foundLocation: 'Central library', foundDate: new Date().toISOString().slice(0, 10), storageLocation: 'Shelf B2', photos: [],
+    }, staff);
+    const itemId = found.json.itemId as string;
+    expect((await call('POST', `/api/staff/complaints/${complaintId}/propose-match`, { itemId }, staff)).status).toBe(200);
+    const claim = await call('POST', `/api/v2/complaints/${complaintId}/claim`, { itemId, evidence: 'The green notebook inside has my student number.' }, reporter);
+    expect(claim.status).toBe(201);
+    expect((await call('POST', `/api/staff/claims/${claim.json.claimId}/decision`, {
+      decision: 'approve', notes: 'Private details match',
+      checks: { evidenceMatches: true, featuresMatch: true, noConflictingClaims: true },
+    }, staff)).status).toBe(200);
+    const handover = await call('POST', '/api/staff/handovers', { claimId: claim.json.claimId }, staff);
+    expect((await call('POST', `/api/v2/handovers/${handover.json.handoverId}/confirm`, {
+      code: handover.json.code, receiverName: 'Registry Name', acknowledgment: 'I confirm that I received my item at the counter.',
+    }, reporter)).status).toBe(200);
+    expect((await call('POST', `/api/staff/handovers/${handover.json.handoverId}/complete`, { receiverIdChecked: true }, staff)).status).toBe(200);
+    const detail = await call('GET', `/api/v2/complaints/${complaintId}`, undefined, reporter);
+    expect(detail.json.complaint.status).toBe('Returned');
+    expect(detail.json.complaint.name).toBe('Registry Name');
+  });
+
   it('validates on the backend', async () => {
     const { call } = makeClient();
     const r = await call('POST', '/api/complaints', complaintBody({ name: '', phone: '', email: '', lostDate: '2099-01-01', category: 'Spaceship' }));

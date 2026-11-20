@@ -70,6 +70,27 @@ describe('Access control', () => {
     expect((await call('POST', '/api/staff/settings', { settings: { unclaimed_days: '30' } }, admin)).status).toBe(200);
   });
 
+  it('enforces Management as server-side read-only', async () => {
+    const { call } = makeClient({ env: { APP_ENV: 'development', DEV_STAFF_LOGIN: '1' } as never });
+    const management = (await call('POST', '/api/staff/dev-session', { email: 'manager@x.edu', role: 'management' })).json.token;
+    expect((await call('GET', '/api/management/overview', undefined, management)).status).toBe(200);
+    expect((await call('GET', '/api/management/policies', undefined, management)).status).toBe(200);
+    expect((await call('GET', '/api/staff/found-items', undefined, management)).status).toBe(403);
+    expect((await call('POST', '/api/management/overview', {}, management)).status).toBe(404);
+  });
+
+  it('isolates OTP-linked V2 complaints by verified reporter UID', async () => {
+    const { call } = makeClient({ env: { APP_ENV: 'development', DEV_STAFF_LOGIN: '1' } as never });
+    const a = (await call('POST', '/api/v2/auth/dev-session', { role: 'student', uid: 'student-a', name: 'Student A' })).json.token;
+    const b = (await call('POST', '/api/v2/auth/dev-session', { role: 'student', uid: 'student-b', name: 'Student B' })).json.token;
+    const created = await call('POST', '/api/v2/complaints', complaintBody({ name: 'Editable name ignored', studentId: 'EDITABLE', phone: '+919999999999' }), a);
+    expect(created.status).toBe(201);
+    expect((await call('GET', `/api/v2/complaints/${created.json.complaintId}`, undefined, a)).status).toBe(200);
+    expect((await call('GET', `/api/v2/complaints/${created.json.complaintId}`, undefined, b)).status).toBe(404);
+    const own = await call('GET', '/api/v2/complaints', undefined, a);
+    expect(own.json.rows).toHaveLength(1);
+  });
+
   it('verifies Google ID tokens for staff and enforces the allowlist', async () => {
     const { call } = makeClient({ env: { GOOGLE_CLIENT_ID: 'cid.apps.googleusercontent.com', STAFF_EMAILS: 'boss@college.edu:admin' } });
     const r = await call('POST', '/api/staff/session', { credential: 'not.a.jwt' });

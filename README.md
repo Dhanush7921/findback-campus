@@ -1,25 +1,27 @@
 # FindBack — Campus Lost & Found
 
-A production web app, installable PWA and Android/iOS app for reporting lost items on campus, tracking them privately with a Complaint ID + secret PIN, and releasing them only after staff verification.
+A production web app, installable PWA and Android/iOS app for reporting lost items on campus, tracking them through a verified-phone private portal, and releasing them only after separate receiver and staff confirmations.
 
-- **No student accounts.** A complaint is opened with its Complaint ID (`FB-XXXX-XXXX`) and a one-time-shown PIN (`XXXX-XXXX-XX`, ~50 bits). PINs are stored only as keyed HMAC-SHA256 hashes.
-- **Staff console** (dashboard, found-item register with photos, inventory, complaints, matching, claim verification, handover, unclaimed items, activity log, analytics, settings) protected by Google Workspace sign-in + a server-side allowlist. It stays **disabled** until that is configured.
-- **Google Sheets is the only record store**; photos go to a private Google Drive folder.
+- **Students and guests use Firebase phone OTP.** The backend validates Firebase ID tokens. Student access additionally requires an exact match against the approved college registry; Guest access is labelled **Phone Verified Guest**.
+- **Main Admin console** handles complaints, found inventory, ownership verification, secure handover, audit and settings. Google sign-in plus a server-side allowlist protects every operation.
+- **Management portal is monitoring-only.** Its APIs are separate, GET-only routes and reject management sessions on operational staff endpoints.
+- **Google Sheets remains the authoritative record store** (the original eight tabs are preserved and extended); private media goes to Cloud Storage.
+- **V1 Complaint ID + PIN routes remain temporarily for existing records only.** New V2 complaints never depend on a user-editable reporter field or a complaint PIN.
 
 ## Architecture
 
 ```
 React + Vite + TS PWA  (GitHub Pages / Capacitor app)
-        │ HTTPS, bearer session tokens (15 min student / 2 h staff)
+        │ HTTPS, Firebase/Google identity tokens and short-lived app sessions
         ▼
-Cloudflare Worker  — validation, PIN hashing, sessions, authorization on every request,
-                     rate limits, lockouts, CORS, security headers, matching, workflow rules
-        │ HMAC-signed, timestamped, nonce-protected envelopes
+Cloud Run API — Firebase/Google token validation, signed app sessions, role checks,
+                rate limits, CORS, audit events, matching and workflow rules
+        │ least-privilege Google APIs
         ▼
-Google Apps Script web app — thin table service (get/query/append/update under LockService),
-                             Drive uploads, daily backups, retention redaction
+Google Sheets API + private Cloud Storage, accessed with a least-privilege
+Cloud Run service identity and no downloaded service-account keys
         ▼
-Private Google Sheet (8 tabs) + private Drive folders
+Private Google Sheet (8 tabs) + private Cloud Storage bucket
 ```
 
 The `Store` interface (`worker/src/store/types.ts`) isolates persistence, so capacity work never touches the frontend or API contract.
@@ -28,10 +30,10 @@ The `Store` interface (`worker/src/store/types.ts`) isolates persistence, so cap
 |---|---|
 | `src/` | Frontend (public pages, student portal, staff console), i18n (English/Telugu) |
 | `shared/domain.ts` | Statuses, transitions, sheet schemas, validation used by frontend **and** backend |
-| `worker/` | Cloudflare Worker gateway + tests |
+| `worker/` | Cloud Run API, persistence adapters and security tests |
 | `apps-script/` | `Code.gs` + `appsscript.json` for the spreadsheet |
 | `tests/gas/emulator.mjs` | Runs the real `Code.gs` in Node with Sheets/Drive/Lock mocks (contract + E2E tests) |
-| `tests/e2e/` | Playwright: UI → Worker (workerd) → emulated Apps Script |
+| `tests/e2e/` | Playwright browser flows against the local full stack |
 | `tests/load/` | Capacity benchmark (local model or live target) |
 | `android/`, `ios/` | Capacitor native projects |
 | `docs/` | Deployment, security, operations, staff process, custom domain |
@@ -46,7 +48,7 @@ npm run test:load         # capacity model
 node tests/stack/dev-stack.mjs             # local stack: http://127.0.0.1:4173/findback-campus/
 ```
 
-Local development uses `APP_ENV=development` (in-memory or emulated store, a "Development sign-in" for staff, demo complaint **1223** / PIN `1223-1223-12` in memory mode). None of this exists in production builds of the Worker.
+Local development uses `APP_ENV=development` (in-memory or emulated store and explicit development sign-ins). None of the development sign-ins are enabled by the Cloud Run production entry point.
 
 ## Deploy
 
@@ -54,4 +56,4 @@ See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**. Workflows: `ci.yml`, `deploy-p
 
 ## Capacity
 
-See **[docs/OPERATIONS.md](docs/OPERATIONS.md#capacity)**. Short version: comfortably handles 10,000 daily visitors; it does **not** support thousands of simultaneous authenticated requests, because Apps Script allows ~30 concurrent executions and serialises writes.
+See **[docs/OPERATIONS.md](docs/OPERATIONS.md#capacity)**. Capacity depends on the live Google Sheets API quota and workload; run the provided load suite against staging before launch and watch Cloud Run latency and error budgets in production.

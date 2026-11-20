@@ -19,12 +19,12 @@ export default defineConfig(({ mode }) => {
       if (mode === 'development') return html;
       const policy = [
         "default-src 'self'",
-        "script-src 'self' https://accounts.google.com/gsi/client https://challenges.cloudflare.com",
+        "script-src 'self' https://accounts.google.com/gsi/client https://challenges.cloudflare.com https://www.gstatic.com",
         "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
         "img-src 'self' data: blob:",
         "font-src 'self' data:",
-        `connect-src 'self' ${apiOrigin} https://accounts.google.com/gsi/`.trim(),
-        'frame-src https://accounts.google.com/gsi/ https://challenges.cloudflare.com',
+        `connect-src 'self' ${apiOrigin} https://accounts.google.com/gsi/ https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com`.trim(),
+        'frame-src https://accounts.google.com/gsi/ https://challenges.cloudflare.com https://*.firebaseapp.com https://*.google.com',
         "worker-src 'self'",
         "manifest-src 'self'",
         "base-uri 'self'",

@@ -21,6 +21,7 @@
     "deploy:backend": "node scripts/deploy-backend.mjs",
     "build:server": "esbuild server/main.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist-server/main.mjs",
     "deploy:gcp": "node scripts/deploy-gcp.mjs",
+    "migrate:sheet": "node scripts/migrate-sheet-v2.mjs",
     "bench:sheets": "esbuild tests/load/bench-sheets.ts --bundle --platform=node --format=esm --outfile=dist-server/bench.mjs && node dist-server/bench.mjs"
   },
   "dependencies": {
@@ -33,6 +34,7 @@
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/noto-sans-telugu": "^5.3.0",
     "@fontsource-variable/plus-jakarta-sans": "^5.3.0",
+    "firebase": "^12.19.0",
     "lucide-react": "^1.76.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

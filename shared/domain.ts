@@ -5,22 +5,34 @@ export const COMPLAINT_STATUSES = [
   'Submitted',
   'Under Review',
   'Potential Match',
+  'Ownership Verification',
+  // Kept for records created by FindBack V1. New V2 flows use
+  // "Ownership Verification".
   'Awaiting Verification',
   'Ready for Collection',
+  'Awaiting Receiver Confirmation',
   'Returned',
   'Closed',
+  'Rejected',
+  'Cancelled',
+  'Unclaimed',
 ] as const;
 export type ComplaintStatus = (typeof COMPLAINT_STATUSES)[number];
 
 /** Server-enforced status transitions (staff actions). */
 export const STATUS_TRANSITIONS: Record<ComplaintStatus, ComplaintStatus[]> = {
-  Submitted: ['Under Review', 'Potential Match', 'Closed'],
-  'Under Review': ['Potential Match', 'Closed'],
-  'Potential Match': ['Under Review', 'Awaiting Verification', 'Closed'],
-  'Awaiting Verification': ['Potential Match', 'Under Review', 'Ready for Collection', 'Closed'],
-  'Ready for Collection': ['Returned', 'Under Review', 'Closed'],
+  Submitted: ['Under Review', 'Potential Match', 'Cancelled', 'Rejected', 'Closed'],
+  'Under Review': ['Potential Match', 'Rejected', 'Cancelled', 'Closed'],
+  'Potential Match': ['Under Review', 'Ownership Verification', 'Awaiting Verification', 'Rejected', 'Cancelled', 'Closed'],
+  'Ownership Verification': ['Potential Match', 'Under Review', 'Ready for Collection', 'Rejected', 'Cancelled', 'Closed'],
+  'Awaiting Verification': ['Potential Match', 'Under Review', 'Ready for Collection', 'Rejected', 'Cancelled', 'Closed'],
+  'Ready for Collection': ['Awaiting Receiver Confirmation', 'Under Review', 'Unclaimed', 'Cancelled', 'Closed'],
+  'Awaiting Receiver Confirmation': ['Returned', 'Ready for Collection', 'Cancelled'],
   Returned: ['Closed'],
   Closed: [],
+  Rejected: [],
+  Cancelled: [],
+  Unclaimed: ['Ready for Collection', 'Closed'],
 };
 
 export const FOUND_ITEM_STATUSES = ['In Storage', 'Matched', 'Claimed', 'Returned', 'Donated', 'Disposed'] as const;
@@ -52,6 +64,8 @@ export const TABLES = {
     'category', 'item_name', 'description', 'color_features', 'last_seen_location',
     'lost_date', 'lost_time', 'photo_file_id', 'ownership_evidence', 'extra_info',
     'linked_item_id', 'collection_instructions', 'staff_notes', 'retention_until', 'version',
+    'reporter_uid', 'reporter_kind', 'reporter_phone', 'reporter_verified_at',
+    'identity_ref', 'identity_status', 'submission_source', 'guest_ref', 'deleted_at', 'deleted_by',
   ],
   Access_Credentials: [
     'complaint_id', 'pin_hash', 'created_at', 'failed_attempts', 'locked_until',
@@ -73,8 +87,14 @@ export const TABLES = {
   Handover_Records: [
     'handover_id', 'created_at', 'complaint_id', 'item_id', 'claim_id',
     'receiver_name', 'receiver_id_checked', 'approved_by', 'handed_over_by', 'notes',
+    'state', 'challenge_hash', 'challenge_expires_at', 'challenge_used_at',
+    'receiver_uid', 'receiver_kind', 'receiver_confirmed_at', 'receiver_acknowledgment',
+    'receiver_evidence_file_id', 'owner_authorization', 'staff_confirmed_at', 'version',
   ],
-  Activity_Log: ['log_id', 'created_at', 'actor', 'action', 'entity', 'entity_id', 'details'],
+  Activity_Log: [
+    'log_id', 'created_at', 'actor', 'action', 'entity', 'entity_id', 'details',
+    'actor_role', 'before_status', 'after_status', 'authorization_result', 'evidence_ref', 'request_id',
+  ],
   Application_Settings: ['key', 'value', 'updated_at', 'updated_by'],
 } as const;
 export type TableName = keyof typeof TABLES;

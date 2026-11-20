@@ -8,6 +8,13 @@ export interface PublicConfig {
   contactPhone: string;
   submissionsOpen: boolean;
   staff: { enabled: boolean; googleClientId: string | null; devLogin?: boolean };
+  reporterAuth: {
+    enabled: boolean;
+    projectId: string | null;
+    apiKey: string | null;
+    authDomain: string | null;
+    appId: string | null;
+  };
   turnstileSiteKey: string | null;
   environment: string;
   degraded?: boolean;

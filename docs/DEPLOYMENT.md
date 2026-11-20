@@ -1,15 +1,15 @@
 # Deployment
 
-Order: **1 Apps Script → 2 Cloudflare Worker → 3 GitHub Pages → 4 Staff sign-in (optional but required for staff use) → 5 Android signing (optional)**.
-Nothing secret is ever committed. Secrets live in Apps Script properties, GitHub encrypted secrets and Cloudflare Worker secrets.
+Production order: **1 Google Cloud/Firebase → 2 safe Sheet migration → 3 Cloud Run API → 4 GitHub Pages frontend → 5 staff/management allowlists → 6 Android signing**.
+Nothing secret is committed. Runtime secrets live in Google Secret Manager; frontend configuration contains only Firebase's public web-app identifiers.
 
 
 
-## Google Cloud Run (recommended)
+## Google Cloud Run (production target)
 
 The API runs on Cloud Run in `asia-south1`, reads/writes the existing Google Sheet through the Sheets API with the
 service's own identity (no key files), stores photos and backups in a private Cloud Storage bucket, and reads
-`PIN_PEPPER` / `SESSION_KEY` from Secret Manager. Apps Script and Cloudflare are not needed.
+`PIN_PEPPER` / `SESSION_KEY` from Secret Manager. Apps Script and Cloudflare are not part of the V2 production request path.
 
 From the repo folder on your computer (needs Node 22+, the Google Cloud CLI and optionally the GitHub CLI):
 
@@ -18,13 +18,32 @@ npm ci
 npm run deploy:gcp
 ```
 
+Before running, enable Phone sign-in in Firebase Authentication / Identity Platform and set these environment variables:
+
+```text
+FIREBASE_PROJECT_ID=<google-cloud-project-id>
+SHEET_ID=<private-google-sheet-id>
+FIREBASE_API_KEY=<firebase-web-api-key>
+FIREBASE_AUTH_DOMAIN=<project>.firebaseapp.com
+FIREBASE_APP_ID=<firebase-web-app-id>
+GOOGLE_CLIENT_ID=<google-oauth-web-client-id>
+STAFF_EMAILS=admin@college.edu:admin,officer@college.edu:staff,principal@college.edu:management
+STAFF_DOMAIN=college.edu
+```
+
+The deploy command runs `scripts/migrate-sheet-v2.mjs` before Cloud Run deployment. It only appends the new V2 columns to the original eight tabs and refuses to proceed if an existing column would need to be reordered.
+
 The script signs you in through the browser, creates or selects a project, asks you to type "yes" before linking
 billing, enables APIs, creates the `findback-api` service account, bucket and secrets (generated once, never rotated),
 asks you to share the Sheet with the service account as Editor, deploys, checks `/api/health`, then sets
 `VITE_API_BASE` and rebuilds the website and Android app. Optional: set `STAFF_EMAILS`, `STAFF_DOMAIN`,
 `GOOGLE_CLIENT_ID` in the environment before running to enable staff sign-in.
 
-## Quick path: deploy the API from your own computer (no API tokens)
+## Legacy V1 deployment reference
+
+The sections below document the pre-V2 Apps Script/Cloudflare deployment only for rollback and existing Complaint ID + PIN records. Do not use this path for a new V2 production launch.
+
+### Quick path: deploy the legacy API from your own computer
 
 After the Apps Script step, run in the repo folder (Node 22+):
 
@@ -37,7 +56,7 @@ It opens your browser for Cloudflare sign-in, deploys the Worker, asks for `GAS_
 (stored only in Cloudflare), generates `PIN_PEPPER`/`SESSION_KEY` if absent (never replaced), checks `/api/health`, then uses the
 GitHub CLI (browser sign-in) to set `VITE_API_BASE` and rebuild the website. Re-run with `-- --reset-gas` to change the Apps Script values.
 
-## 1. Apps Script (data layer)
+### 1. Apps Script (legacy data layer)
 
 1. Open the FindBack spreadsheet (signed in as the account that owns it) → **Extensions → Apps Script**.
 2. Replace `Code.gs` with [`apps-script/Code.gs`](../apps-script/Code.gs). In **Project Settings** tick *Show "appsscript.json"* and replace it with [`apps-script/appsscript.json`](../apps-script/appsscript.json).
@@ -50,7 +69,7 @@ GitHub CLI (browser sign-in) to set `VITE_API_BASE` and rebuild the website. Re-
    "Anyone" is required so the Worker can call it; every request must carry a valid HMAC signature made with `GAS_SHARED_SECRET`, or it is rejected.
 5. Keep the spreadsheet and both folders **private** (do not use "Anyone with the link").
 
-## 2. Cloudflare Worker (API)
+### 2. Cloudflare Worker (legacy API)
 
 1. Create a free Cloudflare account. **My Profile → API Tokens → Create Token → "Edit Cloudflare Workers" template**. Note your **Account ID** (Workers & Pages overview).
 2. In GitHub → repo **Settings → Secrets and variables → Actions → Secrets**, add:

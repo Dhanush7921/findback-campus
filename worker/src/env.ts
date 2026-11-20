@@ -11,10 +11,16 @@ export interface Env {
   ALLOWED_ORIGINS?: string;
   /** Google OAuth Web client ID for staff sign-in. Staff access is disabled if unset. */
   GOOGLE_CLIENT_ID?: string;
-  /** "email:role,email:role" — roles: admin | staff. */
+  /** "email:role,email:role" — roles: admin | staff | management. */
   STAFF_EMAILS?: string;
   /** Optional Google Workspace domain restriction (hd claim). */
   STAFF_DOMAIN?: string;
+  /** Firebase / Identity Platform project used only for mobile OTP authentication. */
+  FIREBASE_PROJECT_ID?: string;
+  /** Public Firebase web configuration returned to the frontend. */
+  FIREBASE_API_KEY?: string;
+  FIREBASE_AUTH_DOMAIN?: string;
+  FIREBASE_APP_ID?: string;
   /** Optional Cloudflare Turnstile secret; enables bot checks on submission. */
   TURNSTILE_SECRET?: string;
   TURNSTILE_SITE_KEY?: string;

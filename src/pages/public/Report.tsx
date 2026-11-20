@@ -1,6 +1,6 @@
 import { Camera, Lock, Send, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router';
+import { Navigate, useNavigate } from 'react-router';
 import { CATEGORIES, complaintInput } from '../../../shared/domain';
 import { useToast } from '../../components/toast';
 import { Button, Card, Field, Input, Notice, PageHeader, Select, Textarea } from '../../components/ui';
@@ -9,6 +9,7 @@ import { useConfig } from '../../lib/config';
 import { useI18n } from '../../lib/i18n';
 import { compressImage } from '../../lib/image';
 import { Turnstile } from '../../components/Turnstile';
+import { getSession } from '../../lib/session';
 
 type Form = Record<'name' | 'studentId' | 'department' | 'phone' | 'email' | 'category' | 'itemName' | 'description' | 'colorFeatures' | 'lastSeenLocation' | 'lostDate' | 'lostTime' | 'ownershipEvidence', string>;
 const empty: Form = { name: '', studentId: '', department: '', phone: '', email: '', category: '', itemName: '', description: '', colorFeatures: '', lastSeenLocation: '', lostDate: '', lostTime: '', ownershipEvidence: '' };
@@ -18,7 +19,14 @@ export default function Report() {
   const toast = useToast();
   const nav = useNavigate();
   const { config, status } = useConfig();
-  const [form, setForm] = useState<Form>(empty);
+  const reporter = getSession('reporter');
+  const [form, setForm] = useState<Form>(() => ({
+    ...empty,
+    name: reporter?.meta?.name ?? '',
+    studentId: reporter?.meta?.role === 'student' ? (reporter.meta.studentId ?? '') : 'GUEST',
+    department: reporter?.meta?.role === 'student' ? (reporter.meta.department ?? '') : 'Visitor',
+    phone: reporter?.meta?.phone ?? '',
+  }));
   const [errors, setErrors] = useState<Partial<Record<keyof Form | 'consent' | 'photo', string>>>({});
   const [consent, setConsent] = useState(false);
   const [photo, setPhoto] = useState<{ mime: string; dataBase64: string; previewUrl: string; bytes: number } | null>(null);
@@ -69,16 +77,16 @@ export default function Report() {
     }
     setSubmitting(true);
     try {
-      const res = await apiPost<{ complaintId: string; pin: string; createdAt: string }>('/api/complaints', {
+      const res = await apiPost<{ complaintId: string; createdAt: string }>('/api/v2/complaints', {
         ...form,
         photo: photo ? { mime: photo.mime, dataBase64: photo.dataBase64 } : undefined,
         idempotencyKey: idemKey.current,
         elapsedMs: Date.now() - startedAt.current,
         website: honeypot.current?.value ?? '',
         turnstileToken,
-      }, { timeoutMs: 60000 });
+      }, { auth: 'reporter', timeoutMs: 60000 });
       // Only now — after the backend confirmed the write — do we show success.
-      nav('/report/success', { replace: true, state: { complaintId: res.complaintId, pin: res.pin, createdAt: res.createdAt } });
+      nav('/report/success', { replace: true, state: { complaintId: res.complaintId, createdAt: res.createdAt, verifiedIdentity: true } });
     } catch (err) {
       const ae = err as ApiError;
       if (ae.details) setErrors(ae.details as typeof errors);
@@ -97,6 +105,7 @@ export default function Report() {
     </Field>
   );
 
+  if (!reporter) return <Navigate to="/" replace />;
   return (
     <div className="safe-x mx-auto max-w-3xl py-10 sm:py-14">
       <PageHeader eyebrow="FindBack" title={t('submit.title')} lead={t('submit.lead')} />
@@ -111,11 +120,12 @@ export default function Report() {
 
         <Card className="space-y-5 p-6 sm:p-8">
           <h2 className="text-lg font-bold">{t('submit.sec1')}</h2>
+          <Notice tone="success">Submitting as <strong>{reporter.meta?.name}</strong> · {reporter.meta?.identityStatus}. The verified phone identity is used as the authoritative reporter.</Notice>
           <div className="grid gap-5 sm:grid-cols-2">
-            {F('name', t('submit.name'), (id, d) => <Input id={id} aria-describedby={d} value={form.name} onChange={set('name')} autoComplete="name" invalid={!!errors.name} required maxLength={80} />, { required: true })}
-            {F('studentId', t('submit.studentId'), (id, d) => <Input id={id} aria-describedby={d} value={form.studentId} onChange={set('studentId')} autoCapitalize="characters" invalid={!!errors.studentId} required maxLength={30} />, { required: true })}
-            {F('department', t('submit.department'), (id, d) => <Input id={id} aria-describedby={d} value={form.department} onChange={set('department')} invalid={!!errors.department} placeholder="e.g. ECE — III Year" required maxLength={80} />, { required: true, className: 'sm:col-span-2' })}
-            {F('phone', t('submit.phone'), (id, d) => <Input id={id} aria-describedby={d} type="tel" inputMode="tel" autoComplete="tel" value={form.phone} onChange={set('phone')} invalid={!!errors.phone} maxLength={20} />, { hint: t('submit.contactHint') })}
+            {F('name', t('submit.name'), (id, d) => <Input id={id} aria-describedby={d} value={form.name} disabled required maxLength={80} />, { required: true })}
+            {reporter.meta?.role === 'student' && F('studentId', t('submit.studentId'), (id, d) => <Input id={id} aria-describedby={d} value={form.studentId} disabled required maxLength={30} />, { required: true })}
+            {reporter.meta?.role === 'student' && F('department', t('submit.department'), (id, d) => <Input id={id} aria-describedby={d} value={form.department} disabled required maxLength={80} />, { required: true, className: 'sm:col-span-2' })}
+            {F('phone', t('submit.phone'), (id, d) => <Input id={id} aria-describedby={d} type="tel" value={form.phone} disabled />, { hint: 'Verified by OTP' })}
             {F('email', t('submit.email'), (id, d) => <Input id={id} aria-describedby={d} type="email" inputMode="email" autoComplete="email" value={form.email} onChange={set('email')} invalid={!!errors.email} maxLength={120} />)}
           </div>
         </Card>

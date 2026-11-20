@@ -28,8 +28,8 @@ export default function Home() {
           </h1>
           <p className="mt-5 max-w-xl text-[17px] leading-relaxed text-ink-500">{t('home.lead')}</p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-            <ButtonLink to="/report" size="lg">{t('home.ctaReport')} <ArrowRight className="h-5 w-5" /></ButtonLink>
-            <ButtonLink to="/track" size="lg" variant="secondary">{t('home.ctaTrack')}</ButtonLink>
+            <ButtonLink to="/access/student" size="lg">Student access <ArrowRight className="h-5 w-5" /></ButtonLink>
+            <ButtonLink to="/access/guest" size="lg" variant="secondary">Guest access</ButtonLink>
           </div>
           <ul className="mt-8 flex flex-wrap gap-x-6 gap-y-2 text-sm text-ink-500">
             {[[UserX, t('home.trust1')], [Lock, t('home.trust2')], [BadgeCheck, t('home.trust3')]].map(([Icon, label]) => {
@@ -39,6 +39,14 @@ export default function Home() {
           </ul>
         </div>
         <HeroArt className="mx-auto w-full max-w-[520px]" />
+      </section>
+
+      <section className="safe-x mx-auto max-w-6xl pb-4">
+        <Card className="grid gap-4 p-5 sm:grid-cols-[1fr_auto_auto] sm:items-center">
+          <div><p className="text-xs font-bold uppercase tracking-[.14em] text-teal-700">Choose the correct portal</p><h2 className="mt-1 text-xl font-bold">Staff operations and management monitoring are separated</h2><p className="mt-1 text-sm text-ink-500">Management is read-only. Guests can report and track only their own verified-phone complaint.</p></div>
+          <ButtonLink to="/staff" variant="secondary">Main Admin</ButtonLink>
+          <ButtonLink to="/management" variant="soft">Management</ButtonLink>
+        </Card>
       </section>
 
       <section className="safe-x mx-auto max-w-6xl py-12">
